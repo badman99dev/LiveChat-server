@@ -181,9 +181,21 @@ function connectChat() {
 
   es.addEventListener('presence', (e) => setOnline(JSON.parse(e.data).online));
 
+  // Server force-closed the room (window ended / idle timeout).
   es.addEventListener('room', (e) => {
     const data = JSON.parse(e.data);
     if (data && data.closed) roomClosed(data.reason);
+  });
+
+  // Terminal deny: bad/expired key, room gone, or window not open yet.
+  es.addEventListener('denied', (e) => {
+    let data = {};
+    try {
+      data = JSON.parse(e.data);
+    } catch {
+      /* ignore */
+    }
+    roomUnavailable(denyMessage(data));
   });
 
   es.addEventListener('hello', (e) => {
@@ -202,9 +214,25 @@ function setOnline(n) {
   els.online.textContent = String(n ?? 0);
 }
 
-// Server closed the room after a long idle spell. Drop the stream and send the
-// user back to the key gate (key prefilled) so they can reopen it if they want.
-function roomClosed(reason) {
+function denyMessage(data) {
+  switch (data.error) {
+    case 'room_not_exist':
+      return 'This room is closed and can no longer be reopened.';
+    case 'not_yet':
+      return 'This room has not opened yet. Try again later.';
+    case 'expired':
+      return 'This key has expired.';
+    case 'bad_format':
+    case 'bad_signature':
+      return 'That key is not valid.';
+    default:
+      return data.message || 'This room is no longer available.';
+  }
+}
+
+// Drop the stream and send the user back to the key gate (key prefilled) so
+// they can reopen the room if their key still allows it.
+function roomUnavailable(message) {
   if (state.chatEs) {
     state.chatEs.close();
     state.chatEs = null;
@@ -219,11 +247,12 @@ function roomClosed(reason) {
   setStatus(els.chatStatus, 'down');
   els.keyInput.value = key || '';
   openKeyModal();
-  showKeyError(
-    reason === 'idle'
-      ? 'This room closed after being idle. Submit the key again to reopen it.'
-      : 'This room is no longer available.',
-  );
+  showKeyError(message);
+}
+
+function roomClosed(reason) {
+  if (reason === 'window') return roomUnavailable('This room closed at the end of its scheduled window.');
+  return roomUnavailable('This room closed after being idle. Submit the key again to reopen it.');
 }
 
 function addMessage(m) {

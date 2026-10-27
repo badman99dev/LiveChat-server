@@ -51,7 +51,9 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
   "rid": "match-1024",
   "name": "IND vs AUS — 2nd ODI",
   "iat": 1761540000,
-  "exp": 1761543600,
+  "openAt": 1761540000,
+  "closeAt": 1761547200,
+  "exp": 1761550800,
   "meta": { "kind": "match", "sport": "cricket" }
 }
 ```
@@ -62,8 +64,31 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
 | `rid` | string | ✅ | `^[a-zA-Z0-9_-]{1,64}$` — **room id** |
 | `name` | string | ✅ | 1–64 chars — room display name |
 | `iat` | int | ✅ | issued-at, unix **seconds** |
-| `exp` | int | ❌ | unix seconds; agar present aur `now > exp` → reject |
+| `openAt` | int | ❌ | isse pehle room khulega hi nahi (`now < openAt` → `not_yet`) |
+| `closeAt` | int | ❌ | is waqt room **force-close**; uske baad key sirf ENTER kar sakti hai, reopen nahi |
+| `exp` | int | ❌ | unix seconds; **key** khud expire (agar `now > exp` → `expired`, poori key reject) |
 | `meta` | object | ❌ | client ko wapas milta hai (icon, kind, etc.) |
+
+### Room window (`openAt` / `closeAt`) — dono optional, ek akela bhi chalega
+
+| Value | Matlab |
+|---|---|
+| dono nahi | Room abhi bhi khul sakta hai, kabhi force-close nahi (purana behaviour) |
+| sirf `openAt` | Room `openAt` se pehle nahi khulega; uske baad normally chalta rahega |
+| sirf `closeAt` | Room abhi se khul sakta hai, `closeAt` pe band |
+| dono | Room sirf `[openAt, closeAt)` ke andar **open/re-open** ho sakta hai, `closeAt` pe band |
+
+**Semantics:**
+- `now < openAt` → **`not_yet`**, room touch bhi nahi hota.
+- `openAt <= now < closeAt` (ya window na ho) → room **open / re-open** ho sakta hai.
+- `now >= closeAt` → key ke paas **sirf enter** permission:
+  - Room abhi band ho jaata hai (row + messages delete, SSE clients ko `event: room` `{closed:true}`).
+  - Dobara kholne ki koshish → **`room_not_exist`** (404). Room `entries` ke liye bhi nahi milega.
+- `exp` alag cheez hai — wo **poori key** ko maar deta hai (`expired`), jabki `closeAt` sirf room band karta hai.
+
+> `closeAt` ke baad key zinda rehti hai (verify pass), bas uske paas **room kholne ka haq nahi** — sirf jo room already khula ho usme enter. Isliye "window khatm = key khatm" nahi, "window khatm = room khatm" hai.
+
+> ⚠️ Room identity `rid` hai. Ek hi `rid` ke do keys ho (ek `closeAt` ke saath, ek bina) to jo bhi request pehle aayegi apne hisaab se room ko close/open karegi — strictest window jeetegi.
 
 ---
 
@@ -79,13 +104,16 @@ Order exactly ye hai:
 6. `v === 1` → `bad_version`
 7. `rid` regex → `bad_room`
 8. `name` 1–64 → `bad_name`
-9. `exp` present && expired → `expired`
+9. `openAt` / `closeAt` parse (bad time / `closeAt <= openAt`) → `bad_time` / `bad_window`
+10. `exp` present && expired → `expired`
 
 `bad_signature` pe **timing-safe** hona GCM me built-in hai (tag check constant-time).
+Steps 9–10 se aage badhne wale checks **room policy** hain (verify ke baad, resolveRoom me):
+`not_yet`, `room_not_exist`.
 
 ### Error codes
 
-| Code | HTTP | Matlab |
+| Code | HTTP | Kab |
 |---|---|---|
 | `no_key` | 400 | koi key bheji nahi gayi |
 | `bad_format` | 403 | prefix / encoding galat |
@@ -94,7 +122,27 @@ Order exactly ye hai:
 | `bad_version` | 403 | `v != 1` |
 | `bad_room` | 403 | rid regex fail |
 | `bad_name` | 403 | name missing/too long |
-| `expired` | 403 | `exp` nikal gaya |
+| `bad_time` | 403 | `openAt`/`closeAt` valid time nahi |
+| `bad_window` | 403 | `closeAt <= openAt` |
+| `expired` | 403 | `exp` nikal gaya (poori key dead) |
+| `not_yet` | 403 | `now < openAt` (room abhi open nahi) |
+| `room_not_exist` | 404 | room band hai aur reopen nahi ho sakta |
+
+### SSE pe deny kaise dikhta hai
+
+`GET /events/chat` pe deny hone par server **200 + SSE** deta hai (JSON error nahi),
+jisme ek terminal event hota hai, phir stream band:
+
+```
+retry: 3000
+
+event: denied
+data: {"error":"room_not_exist","message":"this room is closed and can no longer be reopened","openAt":null}
+```
+
+Client ise dekh ke EventSource **khud close** karta hai → na client retry loop,
+na server pe koi idle connection / RAM. (Plain JSON 4xx hota to browser EventSource
+hamesha retry karta rehta.)
 
 ---
 
@@ -104,12 +152,17 @@ Order exactly ye hai:
 client key bhejta hai
         │
         ▼
-  key verify hoti hai
+  key verify hoti hai (signature, exp)
         │
         ▼
+  now < openAt?  ── HAAN ─►  not_yet (403)
+        │ NAHI
+        ▼
   rooms table me rid hai?
-   ├── NAHI  →  ROOM BANTA HAI  (name/meta key se aate hain, created=1)
-   └── HAAN  →  SIRF JOIN       (existing room hi use hota hai, created=0)
+   ├── NAHI  →  mayOpen?  ── NAHI ─►  room_not_exist (404)
+   │            └─ HAAN ─►  ROOM BANTA HAI  (name/meta/window key se, created=1)
+   └── HAAN  →  closeAt nikal gaya?  ── HAAN ─►  room CLOSE ─► room_not_exist
+                └─ NAHI ─►  SIRF JOIN  (existing room, created=0)
 ```
 
 - **Same key, multiple clients** → sab ek hi room me. Koi limit nahi.
@@ -121,18 +174,21 @@ client key bhejta hai
 
 Sweeper (default har 30s) do cheezein karta hai:
 
-| Cheez | Rule | Env |
+| Cheez | Rule | Env / source |
 |---|---|---|
 | Messages | `created_at` purana → delete | `RETENTION_MINUTES` (default **10**) |
 | Rooms | Activity nahi → room **CLOSE** (row + uske messages delete) | `ROOM_IDLE_MINUTES` (default **30**) |
+| Rooms | `closeAt` nikal gaya → usi instant room **CLOSE** | key ka `closeAt` |
 
 - **Activity** = key verify, `/api/chat/history`, message send, ya SSE connect
   (jo bhi room ko touch kare).
-- Room close hone pe connected clients ko `event: room` `{closed:true,reason:"idle"}`
-  milta hai; `rooms` row + uske messages chale jaate hain (`bans` rehte hain).
+- Room close hone pe connected clients ko `event: room`
+  `{closed:true, reason:"idle"|"window"}` milta hai; `rooms` row + uske messages
+  chale jaate hain (`bans` rehte hain).
 - **Key valid rehti hai** — wahi key dobara bhejo to room **lazily reopen** hota hai
   (naya khaali room). Isliye key ko "permanent room" ki tarah treat na karo, wo
-  entry ticket hai.
+  entry ticket hai. (Exception: `closeAt` nikal gaya ho to reopen `room_not_exist`
+  deta hai.)
 - Idle closing band karni ho to `ROOM_IDLE_MINUTES=0`.
 
 ---
@@ -150,6 +206,10 @@ Sweeper (default har 30s) do cheezein karta hai:
 
 Key hamesha **server** verify karta hai — client kabhi `rid`/`name` khud nahi bhejta.
 
+Har room endpoint (`verify`, `history`, `send`, `stats`, `events/chat`) ye deny
+status de sakta hai: `400 no_key`, `403 not_yet|expired|bad_*`, `404 room_not_exist`.
+`/api/rooms` response me per-room `openAt` / `closeAt` bhi aata hai.
+
 ---
 
 ## 6. Issuer integration (tumhara doosra server)
@@ -159,15 +219,19 @@ Key hamesha **server** verify karta hai — client kabhi `rid`/`name` khud nahi 
 ```js
 const { issueRoomKey } = require('./lib/roomkey');
 
+const now = Math.floor(Date.now() / 1000);
+
 const key = issueRoomKey(
   {
     rid: `match-${match.id}`,
     name: `${match.home} vs ${match.away}`,
     meta: { kind: 'match', sport: 'cricket' },
+    openAt: match.startsAt,       // optional: room opens at match start
+    closeAt: match.endsAt,        // optional: room closes when match ends
   },
   {
     secret: process.env.ROOM_KEY_SECRET,
-    ttlSeconds: 60 * 60 * 6,      // 6 hours; omit for no expiry
+    ttlSeconds: 60 * 60 * 6,      // optional: hard key expiry too
   },
 );
 
@@ -177,11 +241,19 @@ const key = issueRoomKey(
 ### 6b. CLI (testing / ops)
 
 ```bash
+# room opens now, force-closes after 6 hours
 ROOM_KEY_SECRET=$SECRET node scripts/make-room-key.js \
-  --id match-1024 --name "IND vs AUS — 2nd ODI" --ttl 21600 \
+  --id match-1024 --name "IND vs AUS — 2nd ODI" --close +6h \
   --url https://chat.example.com
 # -> https://chat.example.com/?key=rk1.xj3...
+
+# room opens at a fixed time, closes 3 hours later
+node scripts/make-room-key.js --id match-1025 --name "Final" \
+  --open "2026-11-01T14:00:00Z" --end "2026-11-01T17:00:00Z"
 ```
+
+`--open`/`--start` aur `--close`/`--end` ye sab accept karte hain: `now`,
+`+2h`, `-30m`, `+7d`, epoch seconds, ya ISO-8601.
 
 ### 6c. Python (agar doosra server Python me hai)
 
@@ -206,11 +278,14 @@ def derive(secret: str) -> bytes:
 AAD = b'livechat:roomkey:v1'
 B64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
 
-def issue_room_key(rid, name, meta=None, ttl=None, secret=os.environ['ROOM_KEY_SECRET']):
+def issue_room_key(rid, name, meta=None, ttl=None, open_at=None, close_at=None,
+                   secret=os.environ['ROOM_KEY_SECRET']):
     now = int(time.time())
     body = {'v': 1, 'rid': rid, 'name': name, 'iat': now}
-    if meta: body['meta'] = meta
-    if ttl:  body['exp'] = now + int(ttl)
+    if meta:     body['meta'] = meta
+    if open_at:  body['openAt'] = int(open_at)    # unix seconds
+    if close_at: body['closeAt'] = int(close_at)  # unix seconds
+    if ttl:      body['exp'] = now + int(ttl)
     iv = os.urandom(12)
     blob = AESGCM(derive(secret)).encrypt(iv, json.dumps(body, separators=(',', ':')).encode(), AAD)
     # cryptography returns ciphertext||tag  ->  iv + tag + ct

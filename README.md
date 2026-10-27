@@ -20,6 +20,7 @@ Room me entry **Room Access Key (RAK)** se hoti hai — dekho [Room Access Keys]
 
 - **SSE chat** — server → client push, browser khud reconnect karta hai
 - **Room Access Keys (RAK)** — encrypted `rk1...` key me room id + name, lazy room create, multi-use
+- **Key-embedded window** — `openAt` / `closeAt` optional; window ke bahar key sirf enter kar sakti hai
 - **Auto retention** — 10 min purane messages delete, 30 min idle room auto-close (configurable)
 - **Free gap-fill** — `Last-Event-ID` header se miss hui messages apne aap replay
 - **Do parallel streams** — chat + score ek hi connection pe (HTTP/2 multiplexing)
@@ -91,13 +92,14 @@ Do cheezein **sweeper** (har `PRUNE_INTERVAL_MS`, default 30s) handle karta hai:
 |---|---|---|
 | **Messages** | `created_at` isse purana → **delete** | `RETENTION_MINUTES=10` → last **10 min** ka chat |
 | **Rooms** | Koi **activity** nahi → room **close** (row + uske messages delete) | `ROOM_IDLE_MINUTES=30` → **30 min** idle pe close |
+| **Rooms** | Key ka `closeAt` nikal gaya → usi instant close | key ke andar (optional) |
 
 **Activity kya maana jaata hai?** Room ka koi bhi touch: key verify, `/api/chat/history`, message send, ya SSE connect. Jo room 30 min tak chhua nahi gaya, wo band.
 
 **Room close hone pe:**
 - `rooms` row + uske saare messages delete (`bans` chhod ke).
-- Connected clients ko final SSE `event: room` `{closed:true, reason:"idle"}` jaata hai → frontend key gate pe wapas, "room closed" notice ke saath.
-- Key **valid rehta hai** — wahi key dobara bhejo to room **lazily reopen** ho jaata hai (fresh room, khaali chat).
+- Connected clients ko final SSE `event: room` `{closed:true, reason:"idle"|"window"}` jaata hai → frontend key gate pe wapas, "room closed" notice ke saath.
+- Key **valid rehta hai** — wahi key dobara bhejo to room **lazily reopen** ho jaata hai (fresh room, khaali chat). (Agar key ka `closeAt` nikal gaya ho to reopen `404 room_not_exist` deta hai.)
 
 > 💡 `ROOM_IDLE_MINUTES=0` set karo → rooms kabhi auto-close nahi honge (sirf 10-min message retention lagegi).
 
@@ -122,11 +124,26 @@ Key-issuer server ──issue──►  rk1...  ──►  Chat server ──ver
 
 **Secret:** `ROOM_KEY_SECRET` dono servers pe same hona chahiye — key-issuer aur chat server. Secret badla → purane saare keys invalid.
 
+**Key ke andar room ka window bhi chhupa sakte ho** (`openAt` / `closeAt`, dono optional):
+
+| Key me | Matlab |
+|---|---|
+| kuch nahi | Room ab bhi khulega, kabhi force-close nahi |
+| `openAt` | Isse pehle room khulega hi nahi → `403 not_yet` |
+| `closeAt` | Is waqt room **band**; uske baad key **sirf enter** kar sakti hai, reopen nahi → `404 room_not_exist` |
+| dono | Room sirf `[openAt, closeAt)` ke andar open/re-open ho sakta hai, `closeAt` pe band |
+
+> `closeAt` = room ka "khatam hone ka time". Uske baad key zinda rehti hai par uske paas **sirf enter ka haq** hai. Room already band ho gaya ho to `room_not_exist` (404) milta hai aur SSE stream turant band — koi RAM waste nahi.
+
 **Key generate karo:**
 ```bash
 ROOM_KEY_SECRET=$(openssl rand -hex 32) node scripts/make-room-key.js \
-  --id match-1024 --name "IND vs AUS — 2nd ODI" --ttl 7d
+  --id match-1024 --name "IND vs AUS — 2nd ODI" --close +6h
 # rk1.AbCd...xyz
+
+# fixed window
+node scripts/make-room-key.js --id final-1 --name "Final" \
+  --open "2026-11-01T14:00:00Z" --end "2026-11-01T17:00:00Z"
 ```
 
 **Wire format, error codes, Python issuer, rotation — sab detail me [`PROTOCOL.md`](./PROTOCOL.md) me hai.** 👈
@@ -159,7 +176,7 @@ ROOM_KEY_SECRET=$(openssl rand -hex 32) node scripts/make-room-key.js \
 ### Streams (SSE)
 | Method | Path | Events |
 |---|---|---|
-| `GET` | `/events/chat?key=rk1...` | `hello`, `chat`, `presence` |
+| `GET` | `/events/chat?key=rk1...` | `hello`, `chat`, `presence`, `room` (closed), `denied` (terminal) |
 | `GET` | `/events/score` | `score` |
 
 ### Admin

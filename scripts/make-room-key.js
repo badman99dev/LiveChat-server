@@ -11,13 +11,35 @@
 // Options:
 //   --id,   --room   room id            (required, A-Z a-z 0-9 _ - , max 64)
 //   --name           room display name  (default: same as id)
-//   --ttl            seconds until expiry (omit for non-expiring)
+//   --open, --start  room may open from this time (default: now)
+//   --close, --end   room force-closes at this time; afterwards the key can
+//                    only ENTER an existing room, never reopen it
+//   --ttl            seconds until the KEY itself expires (omit for none)
 //   --meta           JSON object string, e.g. '{"kind":"match"}'
 //   --secret         override ROOM_KEY_SECRET
 //   --url            base URL, prints a ready-to-share join link
 //   --json           print a JSON object instead of the bare key
+//
+// Time values accept: an epoch (seconds), an ISO-8601 string, "now", or a
+// relative offset like "+2h", "-30m", "+7d" (s = seconds, m = minutes,
+// h = hours, d = days).
 
 const { issueRoomKey, RoomKeyError } = require('../lib/roomkey');
+
+// Resolve a CLI time argument to epoch seconds (or null).
+function parseTime(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const s = String(value).trim();
+  if (s.toLowerCase() === 'now') return Math.floor(Date.now() / 1000);
+
+  const rel = s.match(/^([+-]?)(\d+(?:\.\d+)?)(s|m|h|d)$/i);
+  if (rel) {
+    const unit = { s: 1, m: 60, h: 3600, d: 86400 }[rel[3].toLowerCase()];
+    const sign = rel[1] === '-' ? -1 : 1;
+    return Math.floor(Date.now() / 1000) + sign * Math.round(Number(rel[2]) * unit);
+  }
+  return s; // epoch or ISO — lib/roomkey normalizes it
+}
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -49,8 +71,10 @@ function usage(code) {
       'make-room-key — mint a room access key',
       '',
       '  node scripts/make-room-key.js --id <room-id> [--name "<Room name>"]',
+      '        [--open +0m | --start <time>] [--close +6h | --end <time>]',
       '        [--ttl <seconds>] [--meta \'{"k":"v"}\'] [--url https://chat.example.com] [--json]',
       '',
+      '  --open/-close: "now", "+2h", "-30m", "+7d", epoch seconds, or ISO-8601',
       '  secret comes from ROOM_KEY_SECRET (or --secret).',
       '',
     ].join('\n'),
@@ -80,10 +104,13 @@ if (typeof args.meta === 'string') {
   }
 }
 
+const openAt = parseTime(args.open ?? args.start);
+const closeAt = parseTime(args.close ?? args.end);
+
 let key;
 try {
   key = issueRoomKey(
-    { rid, name: args.name || rid, meta },
+    { rid, name: args.name || rid, meta, openAt, closeAt },
     { secret, ttlSeconds: args.ttl ? Number(args.ttl) : undefined },
   );
 } catch (err) {
@@ -100,7 +127,12 @@ if (args.json) {
     JSON.stringify(
       {
         key,
-        room: { id: rid, name: args.name || rid },
+        room: {
+          id: rid,
+          name: args.name || rid,
+          openAt: openAt ?? null,
+          closeAt: closeAt ?? null,
+        },
         ttl: args.ttl ? Number(args.ttl) : null,
         joinUrl: base ? `${base}/?key=${encodeURIComponent(key)}` : null,
       },

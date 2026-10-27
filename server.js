@@ -46,12 +46,55 @@ function resolveRoom(url, body) {
     } catch (err) {
       return { error: err.code || 'invalid_key', message: err.message || 'invalid room key' };
     }
-    const { room, created } = db.ensureRoom({
-      rid: payload.rid,
-      name: payload.name,
-      meta: payload.meta,
-    });
-    if (created) console.log(`room created: ${room.room_id} — ${room.name}`);
+
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // Key's window hasn't opened yet.
+    if (payload.openAt && nowSec < payload.openAt) {
+      return {
+        error: 'not_yet',
+        message: `room opens at ${new Date(payload.openAt * 1000).toISOString()}`,
+        openAt: payload.openAt,
+      };
+    }
+
+    // Once the window has elapsed the key can only ENTER an open room — never
+    // create or reopen one.
+    const mayOpen = !payload.closeAt || nowSec < payload.closeAt;
+
+    let room = db.getRoom(payload.rid);
+    if (room && payload.closeAt && nowSec >= payload.closeAt) {
+      // Window elapsed but the sweeper hasn't run yet: close it right here.
+      db.deleteRoom(payload.rid);
+      hub.closeRoom(`chat:${payload.rid}`, 'room', {
+        closed: true,
+        reason: 'window',
+        id: payload.rid,
+      });
+      console.log(`room closed (window ended): ${payload.rid}`);
+      room = null;
+    }
+
+    let created = false;
+    if (!room) {
+      if (!mayOpen) {
+        return {
+          error: 'room_not_exist',
+          message: 'this room is closed and can no longer be reopened',
+        };
+      }
+      const res = db.ensureRoom({
+        rid: payload.rid,
+        name: payload.name,
+        meta: payload.meta,
+        openAt: payload.openAt,
+        closeAt: payload.closeAt,
+      });
+      room = res.room;
+      created = res.created;
+      if (created) console.log(`room created: ${room.room_id} — ${room.name}`);
+    }
+
     db.touchRoom(room.room_id);
     return { room, created, keyed: true };
   }
@@ -65,11 +108,26 @@ function resolveRoom(url, body) {
   return { error: 'no_key', message: 'a room key is required' };
 }
 
+const DENY_STATUS = { no_key: 400, room_not_exist: 404 };
+
 function roomDenied(res, resolved) {
-  return json(res, resolved.error === 'no_key' ? 400 : 403, {
-    error: resolved.error,
-    message: resolved.message,
-  });
+  const body = { error: resolved.error, message: resolved.message };
+  if (resolved.openAt) body.openAt = resolved.openAt;
+  return json(res, DENY_STATUS[resolved.error] || 403, body);
+}
+
+// SSE clients get a terminal `denied` event instead of a JSON error, so the
+// browser stops retrying and the server holds no connection / memory for it.
+function streamDenied(req, res, resolved) {
+  openStream(req, res);
+  res.write(
+    `event: denied\ndata: ${JSON.stringify({
+      error: resolved.error,
+      message: resolved.message,
+      openAt: resolved.openAt ?? null,
+    })}\n\n`,
+  );
+  res.end();
 }
 
 // ---- retention & room expiry ----------------------------------------------
@@ -79,11 +137,21 @@ function roomDenied(res, resolved) {
 // final `room` event. The key stays valid — reusing it lazily reopens the room.
 function sweep() {
   const messages = db.pruneMessages(RETENTION_MINUTES * 60_000);
-  const closed = db.pruneIdleRooms(ROOM_IDLE_MINUTES * 60_000);
-  for (const rid of closed) {
-    hub.closeRoom(`chat:${rid}`, 'room', { closed: true, reason: 'idle', id: rid });
-    console.log(`room closed (idle > ${ROOM_IDLE_MINUTES}m): ${rid}`);
+
+  // Rooms whose key window ended are closed the moment it elapses.
+  for (const rid of db.pruneExpiredRooms()) {
+    hub.closeRoom(`chat:${rid}`, 'room', { closed: true, reason: 'window', id: rid });
+    console.log(`room closed (window ended): ${rid}`);
   }
+
+  // Rooms idle past the idle limit.
+  if (ROOM_IDLE_MINUTES > 0) {
+    for (const rid of db.pruneIdleRooms(ROOM_IDLE_MINUTES * 60_000)) {
+      hub.closeRoom(`chat:${rid}`, 'room', { closed: true, reason: 'idle', id: rid });
+      console.log(`room closed (idle > ${ROOM_IDLE_MINUTES}m): ${rid}`);
+    }
+  }
+
   if (messages) console.log(`pruned ${messages} message(s) older than ${RETENTION_MINUTES}m`);
 }
 
@@ -229,7 +297,14 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       ok: true,
       created,
-      room: { id: room.room_id, name: room.name, meta: room.meta, createdAt: room.created_at },
+      room: {
+        id: room.room_id,
+        name: room.name,
+        meta: room.meta,
+        createdAt: room.created_at,
+        openAt: room.open_at,
+        closeAt: room.close_at,
+      },
     });
   }
 
@@ -241,6 +316,8 @@ async function handleApi(req, res, url) {
         online: hub.count(`chat:${r.room_id}`),
         createdAt: r.created_at,
         lastActivityAt: r.last_activity_at,
+        openAt: r.open_at,
+        closeAt: r.close_at,
       })),
     });
   }
@@ -308,7 +385,7 @@ async function handleApi(req, res, url) {
 
 function handleChatStream(req, res, url) {
   const resolved = resolveRoom(url, null);
-  if (resolved.error) return roomDenied(res, resolved);
+  if (resolved.error) return streamDenied(req, res, resolved);
 
   const room = resolved.room;
   const rid = room.room_id;
