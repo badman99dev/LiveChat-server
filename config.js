@@ -11,15 +11,20 @@ module.exports = {
   // value wahi jo BlazeMovies ke CHAT_IDENTITY_SECRET me hai.
   IDENTITY_SECRET: '',
 
-  // false = older builds (no identity headers) keep working with client-typed
-  // names. true = identity is mandatory for everyone.
-  IDENTITY_REQUIRED: false,
+  // true = identity (Firebase JWT + handle) is MANDATORY: a client that sends
+  // no identity headers is rejected with 403 identity_required, so nobody can
+  // post under a random uid / client-typed name. Old builds must be updated.
+  IDENTITY_REQUIRED: true,
 
   IDENTITY_CACHE_MS: 300_000,      // verified (jwt+handle) combo TTL: 5 min
   IDENTITY_NEGATIVE_MS: 30_000,    // cached rejection TTL: 30 s
   IDENTITY_COMBO_MAX: 10,          // NEW combos per IP ...
   IDENTITY_COMBO_WINDOW_MS: 1_800_000, // ... per 30 min window
   IDENTITY_TIMEOUT_MS: 4_000,      // upstream identity call timeout
+
+  // Real uids never leave this server: clients only ever see
+  // 'u' + HMAC-SHA256(WIRE_ID_SALT, uid).slice(0,16).
+  WIRE_ID_SALT: 'livechat-wire-id-v2',
 
   // ── rooms ─────────────────────────────────────────────────
   // Room keys ka secret Render ke env (ROOM_KEY_SECRET) se aata hai — yahan

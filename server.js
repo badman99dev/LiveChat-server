@@ -10,6 +10,7 @@ const roomkey = require('./lib/roomkey');
 const stickers = require('./lib/stickers');
 const reactions = require('./lib/reactions');
 const identity = require('./lib/identity');
+const { wireId } = require('./lib/wireid');
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
@@ -311,7 +312,7 @@ async function handleApi(req, res, url) {
     const user = auth.sessionFrom(req);
     if (user) return json(res, 200, { user: { id: user.uid, name: user.name } });
     const ident = await identity.verify(req, clientIp(req));
-    if (ident.ok) return json(res, 200, { user: { id: ident.uid, name: ident.handle } });
+    if (ident.ok) return json(res, 200, { user: { id: wireId(ident.uid), name: ident.handle } });
     if (ident.code) {
       return json(
         res,
@@ -345,9 +346,12 @@ async function handleApi(req, res, url) {
     if (!NAME_RE.test(name)) {
       return json(res, 400, { error: 'name must be 2-24 chars (letters, numbers, _ . -)' });
     }
-    // Verified accounts keep their platform uid, so mutes / bans / reports
-    // survive reconnects and follow the person, not one socket.
-    const user = ident.ok ? { uid: ident.uid, name: ident.handle } : auth.newUser(name);
+    // The client NEVER sees a real uid: it gets 'u'+HMAC(uid) and that derived
+    // id is what every session, ban, mute and message is keyed on. Same account
+    // => same id, so moderation still follows the person, not one socket.
+    const user = ident.ok
+      ? { uid: wireId(ident.uid), name: ident.handle }
+      : { uid: wireId(auth.newUser(name).uid), name };
     return json(
       res,
       200,
@@ -440,7 +444,7 @@ async function handleApi(req, res, url) {
         ident.retryAfter ? { 'Retry-After': String(ident.retryAfter) } : {},
       );
     }
-    const sender = ident.ok ? { uid: ident.uid, name: ident.handle } : user;
+    const sender = ident.ok ? { uid: wireId(ident.uid), name: ident.handle } : user;
 
     if (rateLimited(msgLimiter, `${rid}:${sender.uid}`, RATE_MS)) {
       return json(res, 429, { error: 'slow down' });
@@ -492,7 +496,7 @@ async function handleApi(req, res, url) {
         ident.retryAfter ? { 'Retry-After': String(ident.retryAfter) } : {},
       );
     }
-    const sender = ident.ok ? { uid: ident.uid, name: ident.handle } : user;
+    const sender = ident.ok ? { uid: wireId(ident.uid), name: ident.handle } : user;
 
     const r = reactions.getReaction(body.reaction ?? body.body);
     if (!r) return json(res, 400, { error: 'unknown reaction' });

@@ -174,8 +174,11 @@ Verified on: `POST /api/login`, `POST /api/chat/send`, `POST /api/chat/react`,
 Results are cached in-process per token (`IDENTITY_CACHE_MS`, default 5 min), so
 the extra hop costs one call per few minutes — not one per message.
 
-When the identity is verified the chat session's uid **is the Firebase uid**, so
-mutes / bans / reports follow the account instead of one socket.
+When the identity is verified the session key is **derived** from the Firebase
+uid — `'u' + HMAC-SHA256(WIRE_ID_SALT, uid).slice(0,16)` — so mutes / bans /
+reports still follow the account, but the **real uid never leaves this server**:
+not in messages, not in reactions, not in `/api/me`, not even in the session
+cookie. Clients only ever see the `u…` id.
 
 Sab kuch **`config.js`** me hardcoded hai — deploy ke liye koi env var set
 karne ki zarurat nahi. Env var (same naam) set karne par wo config ko override
@@ -186,7 +189,7 @@ karta hai (local testing ke liye):
 IDENTITY_URL:          'https://blazemovies.badman993944.workers.dev/v1/internal/chat-identity'
 IDENTITY_SECRET:       ''        // env se aata hai (Render: IDENTITY_SECRET)
                                   // value = BlazeMovies ka CHAT_IDENTITY_SECRET
-IDENTITY_REQUIRED:     false     // true = purane builds (bina identity) reject
+IDENTITY_REQUIRED:     true      // identity MANDATORY; bina headers = 403 identity_required
 IDENTITY_CACHE_MS:     300000    // verified combo TTL (5 min)
 IDENTITY_NEGATIVE_MS:  30000     // rejection TTL
 IDENTITY_COMBO_MAX:    10        // NEW combos per IP ...
@@ -202,9 +205,15 @@ each IP gets a budget of `IDENTITY_COMBO_MAX` new combinations per
 `retryAfter` (SSE gets `denied` + `retryAfter`). Combinations already verified
 keep working from cache even after the IP hits its budget.
 
-**Rollout:** keep `IDENTITY_REQUIRED=false` while older builds (no headers) are
-in use — they keep working with the legacy client-typed name. Flip to `true`
-once every shipped client sends identity.
+**Rollout:** `IDENTITY_REQUIRED=true` hai — sirf wo builds chat kar sakte hain
+jo `Authorization: Bearer <jwt>` + `X-Chat-Handle` bhejte hain. Purane builds ko
+`403 identity_required` milta hai (unhe update karna hoga). Set it to `false`
+only if you deliberately want the legacy client-typed name back.
+
+**Privacy:** `userId` on the wire (messages, reactions, `/api/me`) is the
+derived `u…` id; the real uid is never stored in a place a client can read, and
+the session cookie is `v2` (payload carries the derived id only). Cookies minted
+before v2 are refused, so every client re-logs in once.
 
 Backend contract (BlazeMovies):
 
