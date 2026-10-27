@@ -208,12 +208,19 @@ Sweeper (default har 30s) do cheezein karta hai:
 | `GET` | `/api/chat/stats?key=…` | query | `{room, online}` |
 | `POST` | `/api/chat/send` | `{ "key": "rk1…", "kind": "sticker", "body": "six" }` | sticker (id allowlist se validate) |
 | `GET` | `/api/stickers` | — | sticker id + label list (art client-side) |
+| `POST` | `/api/chat/react` | `{ "key": "rk1…", "reaction": "heart" }` | ephemeral reaction (store NAHI hota) |
+| `GET` | `/api/reactions` | — | reaction id + emoji list |
 | `GET` | `/api/rooms` | — | sab rooms + live online count |
 
 Key hamesha **server** verify karta hai — client kabhi `rid`/`name` khud nahi bhejta.
 
-Har room endpoint (`verify`, `history`, `send`, `stats`, `events/chat`) ye deny
+Har room endpoint (`verify`, `history`, `send`, `stats`, `react`, `events/chat`) ye deny
 status de sakta hai: `400 no_key`, `403 not_yet|expired|bad_*`, `404 room_not_exist`.
+
+**Reactions (`/api/chat/react`)** ek alag, ephemeral event hai — DB me store **nahi**
+hota, retention/history pe koi asar nahi, aur **per-user rate limit nahi** (sirf
+`REACT_MAX_PER_SEC` server-wide cap). SSE pe `event: reaction` (bina `id:`, isliye
+replay nahi hota).
 `/api/rooms` response me per-room `openAt` / `closeAt` bhi aata hai.
 
 ---

@@ -29,6 +29,8 @@ const els = {
   stickerToggle: $('stickerToggle'),
   stickerPanel: $('stickerPanel'),
   stickerGrid: $('stickerGrid'),
+  reactionBar: $('reactionBar'),
+  floatLayer: $('floatLayer'),
   keyModal: $('keyModal'),
   keyForm: $('keyForm'),
   keyInput: $('keyInput'),
@@ -129,6 +131,68 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') toggleStickerPanel(false);
 });
+
+/* ---------------- reactions (ephemeral, spam-friendly) ---------------- */
+/* Not stored in the DB, not rate-limited per user. A tap floats an emoji
+   locally and fires a tiny SSE event so the whole room sees it. */
+
+let reactionsReady = false;
+
+async function loadReactions() {
+  if (reactionsReady) return;
+  try {
+    const res = await fetch('/api/reactions');
+    const data = await res.json();
+    const list = data.reactions || [];
+    els.reactionBar.replaceChildren();
+    for (const r of list) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'react-btn';
+      btn.dataset.id = r.id;
+      btn.title = r.label || r.id;
+      btn.textContent = r.emoji;
+      els.reactionBar.append(btn);
+    }
+    els.reactionBar.hidden = list.length === 0;
+    reactionsReady = true;
+  } catch {
+    /* reactions are optional */
+  }
+}
+
+els.reactionBar.addEventListener('click', (e) => {
+  const btn = e.target.closest('.react-btn');
+  if (!btn) return;
+  if (!state.key) return openKeyModal();
+  if (!state.user) return openNameModal();
+  floatReaction(btn.textContent, true); // instant local feedback
+  sendReaction(btn.dataset.id); // fire-and-forget
+});
+
+async function sendReaction(reaction) {
+  try {
+    await fetch('/api/chat/react', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: state.key, reaction }),
+      credentials: 'include',
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+function floatReaction(emoji, mine) {
+  const span = document.createElement('span');
+  span.className = 'float-emoji' + (mine ? ' mine' : '');
+  span.textContent = emoji;
+  span.style.left = `${10 + Math.random() * 80}%`;
+  span.style.setProperty('--drift', `${(Math.random() - 0.5) * 90}px`);
+  els.floatLayer.append(span);
+  span.addEventListener('animationend', () => span.remove(), { once: true });
+  while (els.floatLayer.childElementCount > 60) els.floatLayer.firstElementChild.remove();
+}
 
 /* ---------------- second SSE stream (live score) ---------------- */
 /* Room chat ke saath ye doosra EventSource chalta hai — same HTTP/2 connection. */
@@ -247,6 +311,14 @@ function connectChat() {
 
   es.addEventListener('presence', (e) => setOnline(JSON.parse(e.data).online));
 
+  // Ephemeral reaction from anyone in the room (no DB, no replay).
+  es.addEventListener('reaction', (e) => {
+    const data = JSON.parse(e.data);
+    if (!data || !data.emoji) return;
+    if (state.user && data.userId === state.user.id) return; // already shown locally
+    floatReaction(data.emoji, false);
+  });
+
   // Server force-closed the room (window ended / idle timeout).
   es.addEventListener('room', (e) => {
     const data = JSON.parse(e.data);
@@ -307,6 +379,7 @@ function roomUnavailable(message) {
   state.room = null;
   state.seen.clear();
   els.msgs.replaceChildren();
+  els.floatLayer.replaceChildren();
   els.roomName.textContent = 'Room closed';
   els.roomId.textContent = '';
   els.online.textContent = '0';
@@ -592,6 +665,7 @@ els.leaveRoom.addEventListener('click', () => {
   state.room = null;
   state.seen.clear();
   els.msgs.replaceChildren();
+  els.floatLayer.replaceChildren();
   els.roomName.textContent = 'Waiting for a room key…';
   els.roomId.textContent = '';
   els.leaveRoom.hidden = true;
@@ -631,6 +705,7 @@ async function startChat() {
 (async function boot() {
   connectFeed();
   loadStickers();
+  loadReactions();
 
   const urlKey = new URLSearchParams(location.search).get('key');
   const key = urlKey || storedKey();

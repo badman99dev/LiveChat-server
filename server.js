@@ -8,6 +8,7 @@ const { Hub, openStream } = require('./lib/sse');
 const { ScoreFeed } = require('./lib/score');
 const roomkey = require('./lib/roomkey');
 const stickers = require('./lib/stickers');
+const reactions = require('./lib/reactions');
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
@@ -22,6 +23,9 @@ const DEFAULT_ROOM_NAME = process.env.DEFAULT_ROOM_NAME || 'Public chat';
 const RETENTION_MINUTES = Number(process.env.RETENTION_MINUTES ?? 10);
 const ROOM_IDLE_MINUTES = Number(process.env.ROOM_IDLE_MINUTES ?? 30);
 const PRUNE_INTERVAL_MS = Number(process.env.PRUNE_INTERVAL_MS ?? 30_000);
+// Reactions are not rate-limited per user; this caps the *whole server* per
+// second so a single runaway client cannot melt the process. 0 = unlimited.
+const REACT_MAX_PER_SEC = Number(process.env.REACT_MAX_PER_SEC ?? 500);
 const MAX_BODY = 8 * 1024;
 
 const hub = new Hub();
@@ -30,6 +34,20 @@ if (process.env.MOCK_SCORE !== 'false') score.startMock(Number(process.env.MOCK_
 
 const msgLimiter = new Map();
 const loginLimiter = new Map();
+
+// Server-wide reaction firehose cap (see REACT_MAX_PER_SEC).
+let reactWindow = { start: 0, count: 0 };
+let reactSeq = 0;
+function reactAllowed() {
+  if (!REACT_MAX_PER_SEC) return true;
+  const now = Date.now();
+  if (now - reactWindow.start >= 1000) {
+    reactWindow.start = now;
+    reactWindow.count = 0;
+  }
+  reactWindow.count += 1;
+  return reactWindow.count <= REACT_MAX_PER_SEC;
+}
 
 const RID_RE = roomkey.RID_RE;
 const NAME_RE = /^[\p{L}\p{N} _.\-]{2,24}$/u;
@@ -314,6 +332,10 @@ async function handleApi(req, res, url) {
     return json(res, 200, { basePath: '/stickers', stickers: stickers.STICKERS });
   }
 
+  if (route === 'GET /api/reactions') {
+    return json(res, 200, { reactions: reactions.REACTIONS });
+  }
+
   if (route === 'GET /api/rooms') {
     return json(res, 200, {
       rooms: db.listRooms(Number(url.searchParams.get('limit') || 50)).map((r) => ({
@@ -378,6 +400,32 @@ async function handleApi(req, res, url) {
     const wire = toWire(row);
     hub.emit(`chat:${rid}`, 'chat', wire, wire.seq);
     return json(res, 200, { ok: true, message: wire });
+  }
+
+  if (route === 'POST /api/chat/react') {
+    const user = auth.sessionFrom(req);
+    if (!user) return json(res, 401, { error: 'login required' });
+
+    const body = await readBody(req);
+    const resolved = resolveRoom(url, body);
+    if (resolved.error) return roomDenied(res, resolved);
+
+    const r = reactions.getReaction(body.reaction ?? body.body);
+    if (!r) return json(res, 400, { error: 'unknown reaction' });
+
+    // Deliberately NOT rate-limited per user. Only a server-wide cap guards us;
+    // over the cap we quietly drop (200) so spamming stays seamless.
+    if (!reactAllowed()) return json(res, 200, { ok: true, dropped: true });
+
+    hub.emit(`chat:${resolved.room.room_id}`, 'reaction', {
+      rid: `r${++reactSeq}`,
+      reaction: r.id,
+      emoji: r.emoji,
+      userId: user.uid,
+      name: user.name,
+      ts: Date.now(),
+    });
+    return json(res, 200, { ok: true, reaction: r.id });
   }
 
   if (route === 'POST /api/score') {

@@ -22,6 +22,7 @@ Room me entry **Room Access Key (RAK)** se hoti hai — dekho [Room Access Keys]
 - **Room Access Keys (RAK)** — encrypted `rk1...` key me room id + name, lazy room create, multi-use
 - **Key-embedded window** — `openAt` / `closeAt` optional; window ke bahar key sirf enter kar sakti hai
 - **Stickers** — server sirf sticker **id** bhejta hai, art client-side (`/stickers/*.svg`), id allowlist se validate
+- **Reaction bar** — YouTube-jaisa emoji spam: **ephemeral** (DB me store nahi), per-user rate limit **nahi**, server-wide safety cap
 - **Auto retention** — 10 min purane messages delete, 30 min idle room auto-close (configurable)
 - **Free gap-fill** — `Last-Event-ID` header se miss hui messages apne aap replay
 - **Do parallel streams** — chat + score ek hi connection pe (HTTP/2 multiplexing)
@@ -173,13 +174,15 @@ node scripts/make-room-key.js --id final-1 --name "Final" \
 | `GET` | `/api/chat/history?key=rk1...&since=42` | seq 42 ke baad ke messages (replay) |
 | `POST` | `/api/chat/send` | `{"key":"rk1...","body":"hello"}` → broadcast |
 | `POST` | `/api/chat/send` | `{"key":"rk1...","kind":"sticker","body":"six"}` → sticker |
+| `POST` | `/api/chat/react` | `{"key":"rk1...","reaction":"heart"}` → ephemeral reaction (store nahi hota) |
 | `GET` | `/api/chat/stats?key=rk1...` | `{room, online}` |
 | `GET` | `/api/stickers` | Sticker id + label list (art client-side) |
+| `GET` | `/api/reactions` | Reaction id + emoji list |
 
 ### Streams (SSE)
 | Method | Path | Events |
 |---|---|---|
-| `GET` | `/events/chat?key=rk1...` | `hello`, `chat`, `presence`, `room` (closed), `denied` (terminal) |
+| `GET` | `/events/chat?key=rk1...` | `hello`, `chat`, `presence`, `reaction`, `room` (closed), `denied` (terminal) |
 | `GET` | `/events/score` | `score` |
 
 ### Admin
@@ -210,6 +213,14 @@ data: {"seq":43,"room":"match-1024","userId":"u_ab12","name":"Arjun","kind":"sti
 ```
 
 `kind` = `text` (default) ya `sticker`. Sticker message me `body` = sticker **id** (e.g. `six`), asli art client `public/stickers/<id>.svg` se laata hai.
+
+Reaction ek alag, **ephemeral** event hai (koi `id:` nahi, isliye replay nahi hota):
+
+```
+event: reaction
+data: {"rid":"r7","reaction":"heart","emoji":"❤️","userId":"u_ab12","name":"Arjun","ts":1730000002000}
+
+```
 
 - `id:` = message seq number. Browser ise yaad rakhta hai.
 - Reconnect hone pe browser `Last-Event-ID: 42` header bhejta hai → server seq 42 ke baad ke saare messages bhej deta hai. **Messages kabhi miss nahi hote.**
@@ -388,6 +399,20 @@ n.addEventListener('notify', (e) => showToast(JSON.parse(e.data)));
 
 ---
 
+## Reaction bar (emoji spam) 💥
+
+YouTube-style: log bina rukawat ❤️ 👍 🔥 😂 🎉 👏 spam karte hain. Design:
+
+- **Store nahi hota** — reactions DB me nahi jaate, na retention, na history. Sirf SSE event.
+- **Per-user rate limit nahi** — spam karna hi point hai. `POST /api/chat/react {key, reaction}`.
+- **Safety cap** — `REACT_MAX_PER_SEC` (default `500`) poore **server** ka firehose cap hai; limit cross ho to extra reactions chup-chaap drop (client ko `{ok:true,dropped:true}`). `0` = unlimited.
+- Client tap pe **turant** apna emoji float karta hai, aur SSE se baaki sab ke. Apne hi event ko skip karta hai (double na dikhe).
+- **Login zaroori** (401 warna) taaki anonymous flood na ho, par reaction pe koi cooldown nahi.
+
+Naya reaction add karna: `lib/reactions.js` me `{ id, emoji, label }` daal do. Bas.
+
+---
+
 ## Naya sticker add karna 🏷️
 
 Server sirf **id** jaanta hai, art client-side rehti hai:
@@ -436,6 +461,7 @@ live-chat-sse/
 │   ├── db.js              # SQLite: messages (text+sticker) + bans + rooms
 │   ├── roomkey.js         # RAK issue/verify (AES-256-GCM, rk1)
 │   ├── stickers.js        # sticker id allowlist (server knows ids only)
+│   ├── reactions.js       # reaction emoji allowlist (ephemeral)
 │   ├── auth.js            # HMAC signed cookie sessions
 │   ├── sse.js             # Hub (rooms) + openStream + heartbeat
 │   └── score.js           # Mock score feed (example 2nd stream)
