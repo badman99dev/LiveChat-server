@@ -37,7 +37,7 @@ services:
       # generateValue works for a single service; for two services copy one
       # value across them. Leave unset to disable ?key= room links.
       - key: ROOM_KEY_SECRET
-        generateValue: true
+        value: "6239a3b9744a5586c88853c1e5d66a634b60daac2380be38fbc85a892411eece"
       # optional public room when no key is supplied; blank = keys only
       - key: DEFAULT_ROOM
         value: ""
