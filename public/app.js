@@ -26,6 +26,9 @@ const els = {
   count: $('count'),
   jump: $('jump'),
   composer: $('composer'),
+  stickerToggle: $('stickerToggle'),
+  stickerPanel: $('stickerPanel'),
+  stickerGrid: $('stickerGrid'),
   keyModal: $('keyModal'),
   keyForm: $('keyForm'),
   keyInput: $('keyInput'),
@@ -63,6 +66,69 @@ function saveKey(key) {
     /* ignore (private mode) */
   }
 }
+
+/* ---------------- stickers ---------------- */
+/* The server only knows sticker ids; the artwork is fetched from /stickers/
+   (client-side asset). Sending a sticker posts { kind:'sticker', body:<id> }. */
+
+const STICKER_BASE = '/stickers';
+let stickersReady = false;
+
+async function loadStickers() {
+  if (stickersReady) return;
+  try {
+    const res = await fetch('/api/stickers');
+    const data = await res.json();
+    const list = data.stickers || [];
+    const base = data.basePath || STICKER_BASE;
+    els.stickerGrid.replaceChildren();
+    for (const s of list) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sticker-btn';
+      btn.title = s.label || s.id;
+      btn.dataset.id = s.id;
+      const img = document.createElement('img');
+      img.src = `${base}/${encodeURIComponent(s.id)}.svg`;
+      img.alt = s.label || s.id;
+      img.loading = 'lazy';
+      img.draggable = false;
+      btn.append(img);
+      els.stickerGrid.append(btn);
+    }
+    stickersReady = true;
+  } catch {
+    /* ignore — stickers are optional */
+  }
+}
+
+function toggleStickerPanel(force) {
+  const show = force ?? els.stickerPanel.hidden;
+  els.stickerPanel.hidden = !show;
+  els.stickerToggle.setAttribute('aria-expanded', String(show));
+  els.stickerToggle.classList.toggle('active', show);
+}
+
+els.stickerToggle.addEventListener('click', () => {
+  loadStickers();
+  toggleStickerPanel();
+});
+
+els.stickerGrid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.sticker-btn');
+  if (!btn) return;
+  sendSticker(btn.dataset.id);
+});
+
+document.addEventListener('click', (e) => {
+  if (els.stickerPanel.hidden) return;
+  if (els.composer.contains(e.target)) return;
+  toggleStickerPanel(false);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') toggleStickerPanel(false);
+});
 
 /* ---------------- second SSE stream (live score) ---------------- */
 /* Room chat ke saath ye doosra EventSource chalta hai — same HTTP/2 connection. */
@@ -277,8 +343,19 @@ function addMessage(m) {
   name.textContent = m.name;
 
   const body = document.createElement('span');
-  body.className = 'msg-body';
-  body.textContent = m.body;
+  if (m.kind === 'sticker') {
+    li.classList.add('sticker-msg');
+    body.className = 'msg-body sticker';
+    const img = document.createElement('img');
+    img.className = 'sticker-img';
+    img.src = `${STICKER_BASE}/${encodeURIComponent(m.body)}.svg`;
+    img.alt = m.body;
+    img.draggable = false;
+    body.append(img);
+  } else {
+    body.className = 'msg-body';
+    body.textContent = m.body;
+  }
 
   main.append(name, body);
 
@@ -405,6 +482,30 @@ els.composer.addEventListener('submit', async (e) => {
   }
 });
 
+async function sendSticker(id) {
+  if (!id) return;
+  if (!state.key) return openKeyModal();
+  if (!state.user) return openNameModal();
+  if (performance.now() < state.cooldownUntil) return;
+
+  state.cooldownUntil = performance.now() + RATE_MS;
+  toggleStickerPanel(false);
+
+  try {
+    const res = await fetch('/api/chat/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: state.key, kind: 'sticker', body: id }),
+      credentials: 'include',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return showComposerError(data.error || 'could not send');
+    if (data.message) addMessage(data.message);
+  } catch {
+    showComposerError('network error');
+  }
+}
+
 let errTimer = 0;
 function showComposerError(text) {
   clearTimeout(errTimer);
@@ -422,6 +523,8 @@ function setUser(user) {
   state.user = user;
   els.input.disabled = !user;
   els.send.disabled = !user;
+  els.stickerToggle.disabled = !user;
+  if (!user) toggleStickerPanel(false);
   els.changeName.hidden = !user;
   els.input.placeholder = user ? 'Say something...' : 'Set a name to chat';
   if (user) {
@@ -483,6 +586,7 @@ els.leaveRoom.addEventListener('click', () => {
     state.chatEs.close();
     state.chatEs = null;
   }
+  toggleStickerPanel(false);
   saveKey('');
   state.key = null;
   state.room = null;
@@ -526,6 +630,7 @@ async function startChat() {
 
 (async function boot() {
   connectFeed();
+  loadStickers();
 
   const urlKey = new URLSearchParams(location.search).get('key');
   const key = urlKey || storedKey();

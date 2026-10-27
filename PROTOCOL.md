@@ -206,6 +206,8 @@ Sweeper (default har 30s) do cheezein karta hai:
 | `GET` | `/api/chat/history?key=…&since=…&limit=…` | query | purane messages |
 | `POST` | `/api/chat/send` | `{ "key": "rk1…", "body": "hi" }` | message bhejo (login zaroori) |
 | `GET` | `/api/chat/stats?key=…` | query | `{room, online}` |
+| `POST` | `/api/chat/send` | `{ "key": "rk1…", "kind": "sticker", "body": "six" }` | sticker (id allowlist se validate) |
+| `GET` | `/api/stickers` | — | sticker id + label list (art client-side) |
 | `GET` | `/api/rooms` | — | sab rooms + live online count |
 
 Key hamesha **server** verify karta hai — client kabhi `rid`/`name` khud nahi bhejta.

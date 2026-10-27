@@ -21,6 +21,7 @@ Room me entry **Room Access Key (RAK)** se hoti hai — dekho [Room Access Keys]
 - **SSE chat** — server → client push, browser khud reconnect karta hai
 - **Room Access Keys (RAK)** — encrypted `rk1...` key me room id + name, lazy room create, multi-use
 - **Key-embedded window** — `openAt` / `closeAt` optional; window ke bahar key sirf enter kar sakti hai
+- **Stickers** — server sirf sticker **id** bhejta hai, art client-side (`/stickers/*.svg`), id allowlist se validate
 - **Auto retention** — 10 min purane messages delete, 30 min idle room auto-close (configurable)
 - **Free gap-fill** — `Last-Event-ID` header se miss hui messages apne aap replay
 - **Do parallel streams** — chat + score ek hi connection pe (HTTP/2 multiplexing)
@@ -171,7 +172,9 @@ node scripts/make-room-key.js --id final-1 --name "Final" \
 | `GET` | `/api/chat/history?key=rk1...&limit=50` | Last N messages |
 | `GET` | `/api/chat/history?key=rk1...&since=42` | seq 42 ke baad ke messages (replay) |
 | `POST` | `/api/chat/send` | `{"key":"rk1...","body":"hello"}` → broadcast |
+| `POST` | `/api/chat/send` | `{"key":"rk1...","kind":"sticker","body":"six"}` → sticker |
 | `GET` | `/api/chat/stats?key=rk1...` | `{room, online}` |
+| `GET` | `/api/stickers` | Sticker id + label list (art client-side) |
 
 ### Streams (SSE)
 | Method | Path | Events |
@@ -198,9 +201,15 @@ Har event aisa dikhta hai:
 ```
 id: 42
 event: chat
-data: {"seq":42,"room":"match-1024","userId":"u_ab12","name":"Arjun","body":"hi","ts":1730000000000}
+data: {"seq":42,"room":"match-1024","userId":"u_ab12","name":"Arjun","kind":"text","body":"hi","ts":1730000000000}
+
+id: 43
+event: chat
+data: {"seq":43,"room":"match-1024","userId":"u_ab12","name":"Arjun","kind":"sticker","body":"six","ts":1730000001200}
 
 ```
+
+`kind` = `text` (default) ya `sticker`. Sticker message me `body` = sticker **id** (e.g. `six`), asli art client `public/stickers/<id>.svg` se laata hai.
 
 - `id:` = message seq number. Browser ise yaad rakhta hai.
 - Reconnect hone pe browser `Last-Event-ID: 42` header bhejta hai → server seq 42 ke baad ke saare messages bhej deta hai. **Messages kabhi miss nahi hote.**
@@ -233,6 +242,14 @@ await fetch('/api/chat/send', {
   headers: { 'Content-Type': 'application/json' },
   credentials: 'include',                        // cookie (login) zaroori
   body: JSON.stringify({ key, body: 'hello' }),
+});
+
+// sticker bhejna (id allowlist me honi chahiye)
+await fetch('/api/chat/send', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'include',
+  body: JSON.stringify({ key, kind: 'sticker', body: 'six' }),
 });
 ```
 
@@ -371,6 +388,19 @@ n.addEventListener('notify', (e) => showToast(JSON.parse(e.data)));
 
 ---
 
+## Naya sticker add karna 🏷️
+
+Server sirf **id** jaanta hai, art client-side rehti hai:
+
+1. `lib/stickers.js` me entry add karo: `{ id: 'hattrick', label: 'Hat-trick!' }`
+2. `public/stickers/hattrick.svg` daal do
+
+Bas. Client `/api/stickers` se list laata hai aur `/stickers/<id>.svg` render karta hai.
+Server id ko allowlist se validate karta hai — galat id pe `400 unknown sticker`, isliye
+koi client arbitrary id inject nahi kar sakta.
+
+---
+
 ## Scaling notes 📈
 
 - **1 server, 512MB RAM:** ~5,000-10,000 idle SSE connections aaram se. 100 users = mushkil se 50MB.
@@ -403,16 +433,18 @@ n.addEventListener('notify', (e) => showToast(JSON.parse(e.data)));
 live-chat-sse/
 ├── server.js              # HTTP server, routes, room-key resolution, SSE endpoints
 ├── lib/
-│   ├── db.js              # SQLite: messages + bans + rooms, replay/history/prune
+│   ├── db.js              # SQLite: messages (text+sticker) + bans + rooms
 │   ├── roomkey.js         # RAK issue/verify (AES-256-GCM, rk1)
+│   ├── stickers.js        # sticker id allowlist (server knows ids only)
 │   ├── auth.js            # HMAC signed cookie sessions
 │   ├── sse.js             # Hub (rooms) + openStream + heartbeat
 │   └── score.js           # Mock score feed (example 2nd stream)
 ├── public/
-│   ├── index.html         # Chat UI + room header + key gate modal
+│   ├── index.html         # Chat UI + room header + key gate + sticker picker
 │   ├── style.css          # Broadcast-lime dark theme
-│   ├── app.js             # key gate + 2 EventSource + POST, dedupe, scroll-freeze
+│   ├── app.js             # key gate + 2 EventSource + POST, stickers, dedupe
 │   ├── favicon.svg
+│   ├── stickers/          # sticker SVGs, served client-side by id
 │   └── fonts/             # Self-hosted woff2 (156K total)
 ├── scripts/
 │   └── make-room-key.js   # CLI: room access key mint karo

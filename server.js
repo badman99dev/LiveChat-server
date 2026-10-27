@@ -7,6 +7,7 @@ const auth = require('./lib/auth');
 const { Hub, openStream } = require('./lib/sse');
 const { ScoreFeed } = require('./lib/score');
 const roomkey = require('./lib/roomkey');
+const stickers = require('./lib/stickers');
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
@@ -308,6 +309,11 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (route === 'GET /api/stickers') {
+    // Catalogue only — the SVG artwork is served client-side from /stickers/.
+    return json(res, 200, { basePath: '/stickers', stickers: stickers.STICKERS });
+  }
+
   if (route === 'GET /api/rooms') {
     return json(res, 200, {
       rooms: db.listRooms(Number(url.searchParams.get('limit') || 50)).map((r) => ({
@@ -349,13 +355,26 @@ async function handleApi(req, res, url) {
       return json(res, 403, { error: 'you are muted' });
     }
 
-    const text = normalizeText(body.body);
-    if (!text) return json(res, 400, { error: 'empty message' });
-    if (text.length > CHAT_MAX_LEN) {
-      return json(res, 400, { error: `max ${CHAT_MAX_LEN} characters` });
+    // A sticker message carries only an id; the artwork lives client-side. We
+    // validate the id against the catalogue so nothing arbitrary is broadcast.
+    const isSticker = body.kind === 'sticker' || body.sticker !== undefined;
+    let kind = 'text';
+    let text;
+
+    if (isSticker) {
+      const id = normalizeText(body.sticker ?? body.body).toLowerCase();
+      if (!stickers.isValidSticker(id)) return json(res, 400, { error: 'unknown sticker' });
+      kind = 'sticker';
+      text = id;
+    } else {
+      text = normalizeText(body.body);
+      if (!text) return json(res, 400, { error: 'empty message' });
+      if (text.length > CHAT_MAX_LEN) {
+        return json(res, 400, { error: `max ${CHAT_MAX_LEN} characters` });
+      }
     }
 
-    const row = db.insert({ channel: rid, userId: user.uid, name: user.name, body: text });
+    const row = db.insert({ channel: rid, userId: user.uid, name: user.name, body: text, kind });
     const wire = toWire(row);
     hub.emit(`chat:${rid}`, 'chat', wire, wire.seq);
     return json(res, 200, { ok: true, message: wire });
@@ -444,6 +463,7 @@ function toWire(row) {
     room: row.channel_id,
     userId: row.user_id,
     name: row.name,
+    kind: row.kind || 'text',
     body: row.body,
     ts: row.created_at,
   };

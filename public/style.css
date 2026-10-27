@@ -197,6 +197,13 @@ button{font:inherit;color:inherit}
   font-variant-numeric:tabular-nums;user-select:none;
   padding-top:2px;
 }
+.msg-body.sticker{display:block;margin-top:3px}
+.sticker-img{
+  width:88px;height:88px;display:block;
+  filter:drop-shadow(0 6px 14px rgba(0,0,0,.45));
+  user-select:none;-webkit-user-drag:none;
+}
+.msg.sticker-msg .msg-main{display:flex;flex-direction:column}
 .msg.mine{background:rgba(217,255,67,.045);box-shadow:inset 2px 0 0 var(--accent)}
 .msg.mine .msg-name{color:var(--accent)}
 @keyframes msgIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
@@ -249,6 +256,39 @@ button{font:inherit;color:inherit}
 .send svg{width:19px;height:19px}
 .send:hover{background:#e6ff6b}
 .send:disabled{background:#1b2226;color:var(--dim);cursor:not-allowed}
+
+/* ---------- stickers ---------- */
+.sticker-toggle{
+  width:42px;height:42px;flex:none;border:1px solid var(--line);border-radius:10px;
+  background:var(--panel-2);color:var(--text);cursor:pointer;
+  display:grid;place-items:center;transition:.18s;
+}
+.sticker-toggle svg{width:20px;height:20px}
+.sticker-toggle:hover{border-color:rgba(217,255,67,.45);color:var(--accent)}
+.sticker-toggle.active{background:rgba(217,255,67,.12);border-color:rgba(217,255,67,.5);color:var(--accent)}
+.sticker-toggle:disabled{opacity:.5;cursor:not-allowed}
+.sticker-panel{
+  position:absolute;left:14px;right:14px;bottom:calc(100% + 8px);z-index:6;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:12px;box-shadow:0 24px 60px -20px rgba(0,0,0,.8);
+  animation:msgIn .16s ease-out;
+}
+.sticker-panel[hidden]{display:none}
+.sticker-panel-title{
+  display:block;margin:0 2px 9px;
+  font-family:var(--mono);font-size:9px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--dim);
+}
+.sticker-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(56px,1fr));gap:8px;
+  max-height:190px;overflow-y:auto;
+}
+.sticker-btn{
+  border:0;background:transparent;padding:2px;border-radius:12px;cursor:pointer;
+  transition:transform .12s,background .12s;
+}
+.sticker-btn:hover{background:rgba(217,255,67,.1);transform:translateY(-2px)}
+.sticker-btn img{width:100%;height:auto;display:block;-webkit-user-drag:none}
 
 /* ---------- modal ---------- */
 .modal{

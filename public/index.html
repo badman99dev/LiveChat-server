@@ -55,13 +55,32 @@
       </div>
 
       <form class="composer" id="composer" autocomplete="off">
+        <div class="sticker-panel" id="stickerPanel" hidden>
+          <span class="sticker-panel-title">Stickers</span>
+          <div class="sticker-grid" id="stickerGrid"></div>
+        </div>
+        <button
+          class="sticker-toggle"
+          id="stickerToggle"
+          type="button"
+          title="Stickers"
+          aria-label="Stickers"
+          aria-expanded="false"
+          disabled
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a9 9 0 1 0 0 18h4.2a2.8 2.8 0 0 0 2-4.8l-.6-.6a1.9 1.9 0 0 1 1.4-3.2H19A7 7 0 0 0 12 3Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            <circle cx="9" cy="9.6" r="1.15" fill="currentColor"/>
+            <circle cx="14.4" cy="9.2" r="1.15" fill="currentColor"/>
+          </svg>
+        </button>
         <input
           class="chat-input"
           id="input"
           name="body"
           type="text"
           maxlength="500"
-          placeholder="Say something…"
+          placeholder="Say something..."
           aria-label="Message"
           disabled
         />

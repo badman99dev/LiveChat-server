@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="CLAP">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6fdcff"/>
+      <stop offset="1" stop-color="#1899d6"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#g)"/>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="none" stroke="#00000022" stroke-width="2"/>
+  <text x="64" y="67" text-anchor="middle" dominant-baseline="central" font-family="'Barlow Condensed','Arial Narrow',Arial,sans-serif" font-size="40" font-weight="800" letter-spacing="1" fill="#04222e">CLAP</text>
+</svg>
