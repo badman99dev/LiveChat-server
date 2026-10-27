@@ -8,7 +8,7 @@ const { Hub, openStream } = require('./lib/sse');
 const { ScoreFeed } = require('./lib/score');
 
 const PORT = Number(process.env.PORT || 8080);
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const CHAT_MAX_LEN = Number(process.env.CHAT_MAX_LEN || 500);
 const RATE_MS = Number(process.env.RATE_MS || 1000);
