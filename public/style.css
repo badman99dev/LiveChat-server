@@ -158,6 +158,18 @@ button{font:inherit;color:inherit}
 }
 .ghost:hover{color:var(--text);border-color:#2c363c}
 
+.chat-kicker{
+  display:block;margin-bottom:6px;
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.28em;
+  text-transform:uppercase;color:var(--dim);
+}
+.chat-title h1{
+  font-size:19px;letter-spacing:.06em;text-transform:none;
+  max-width:min(46ch,52vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.room-id{color:var(--accent-dim)}
+.head-actions{display:flex;gap:7px;flex-shrink:0}
+
 /* ---------- messages ---------- */
 .chat-body{position:relative;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .messages{list-style:none;margin:0;padding:12px 10px 20px 14px}

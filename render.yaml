@@ -33,6 +33,14 @@ services:
         value: "true"
       - key: SESSION_SECRET
         generateValue: true
+      # SHARED with the key-issuer server. Set the SAME value on both.
+      # generateValue works for a single service; for two services copy one
+      # value across them. Leave unset to disable ?key= room links.
+      - key: ROOM_KEY_SECRET
+        generateValue: true
+      # optional public room when no key is supplied; blank = keys only
+      - key: DEFAULT_ROOM
+        value: ""
       - key: MOCK_SCORE
         value: "true"
       - key: MOCK_SCORE_MS

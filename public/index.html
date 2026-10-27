@@ -33,14 +33,20 @@
     <section class="chat" aria-label="Live chat">
       <header class="chat-head">
         <div class="chat-title">
-          <h1>Live Chat</h1>
+          <span class="chat-kicker">live chat</span>
+          <h1 id="roomName">Waiting for a room key…</h1>
           <p>
             <span class="online-dot"></span><span id="online">0</span> watching
             <span class="sep">/</span>
+            <span class="room-id" id="roomId"></span>
+            <span class="sep" id="feedSep">/</span>
             <span class="feed-note" id="feedNote">feed —</span>
           </p>
         </div>
-        <button class="ghost" id="changeName" type="button" hidden>change name</button>
+        <div class="head-actions">
+          <button class="ghost" id="leaveRoom" type="button" hidden>change room</button>
+          <button class="ghost" id="changeName" type="button" hidden>change name</button>
+        </div>
       </header>
 
       <div class="chat-body" id="chatBody">
@@ -66,6 +72,20 @@
       </form>
     </section>
   </main>
+
+  <div class="modal" id="keyModal" hidden>
+    <form class="card" id="keyForm">
+      <span class="card-kicker">private room</span>
+      <h2>Enter room key<br /><em>to join the chat</em></h2>
+      <label class="field">
+        <span>room access key</span>
+        <input id="keyInput" type="text" placeholder="rk1.xxxxxxxx" autocomplete="off" spellcheck="false" required />
+      </label>
+      <p class="error" id="keyError" role="alert" hidden></p>
+      <button class="primary" type="submit">Open room</button>
+      <p class="card-foot">The key carries the room id + name and is verified on the server.</p>
+    </form>
+  </div>
 
   <div class="modal" id="nameModal" hidden>
     <form class="card" id="nameForm">

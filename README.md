@@ -5,23 +5,26 @@ Live chat + live score, **poore zero framework** pe — sirf Node ka `http` modu
 ```
 Browser ──HTTP/2──► Nginx ──► Node (SSE + POST) ──► SQLite
               │
-              ├─ GET  /events/chat   (stream, browser-native reconnect)
-              ├─ GET  /events/score  (stream, doosri stream parallel)
-              └─ POST /api/chat/send (write path)
+              ├─ GET  /events/chat?key=rk1...   (stream, browser-native reconnect)
+              ├─ GET  /events/score             (stream, doosri stream parallel)
+              ├─ POST /api/room/verify          (room key validate)
+              └─ POST /api/chat/send            (write path)
 ```
 
 WebSocket **nahi** hai. Kyun? Dekho [Kyun SSE?](#kyun-sse-websocket-nahi).
+Room me entry **Room Access Key (RAK)** se hoti hai — dekho [Room Access Keys](#room-access-keys-rak-).
 
 ---
 
 ## Features ✅
 
 - **SSE chat** — server → client push, browser khud reconnect karta hai
+- **Room Access Keys (RAK)** — encrypted `rk1...` key me room id + name, lazy room create, multi-use
 - **Free gap-fill** — `Last-Event-ID` header se miss hui messages apne aap replay
 - **Do parallel streams** — chat + score ek hi connection pe (HTTP/2 multiplexing)
 - **Cookie auth** — HMAC-signed `sid` cookie, koi JWT library nahi
 - **Rate limit** — per-user (chat) + per-IP (login), memory-map based
-- **Mute/ban** — channel-wise, SQLite `bans` table se
+- **Mute/ban** — room-wise, SQLite `bans` table se
 - **Self-hosted fonts** — Barlow / Barlow Condensed / IBM Plex Mono, koi Google CDN nahi
 - **Graceful shutdown** — SIGTERM pe streams close + DB prune
 - **Low-RAM tuned** — 512MB VPS pe ~50MB RSS, `MemoryMax=384M` cap
@@ -70,6 +73,39 @@ curl localhost:8080/healthz
 | `RATE_MS` | `1000` | Ek user ek ms mein kitne ms wait kare |
 | `REPLAY_LIMIT` | `100` | Reconnect pe max kitne messages replay ho |
 | `DATA_DIR` | `./data` | SQLite file kahan |
+| `ROOM_KEY_SECRET` | `` (empty) | **RAK ke liye.** Shared secret (64-hex ya base64 ya koi bhi string). Empty = keys band |
+| `DEFAULT_ROOM` | `` (empty) | Key na ho to fallback room id (dev/demo). Empty = sirf key-based rooms |
+| `DEFAULT_ROOM_NAME` | `Public chat` | Fallback room ka display naam |
+
+---
+
+## Room Access Keys (RAK) 🔑
+
+Chat room me ghusne ke liye **encrypted key** chahiye — format `rk1...`. Key ke andar room id (`rid`) aur naam encoded hota hai, isliye server ko kuch bhi trust karne ki zaroorat nahi. Pehli valid key aane pe room **khud ban jaata hai** (lazy create), uske baad wahi key se jitne chaho log join kar sakte hain.
+
+```
+Key-issuer server ──issue──►  rk1...  ──►  Chat server ──verify──►  room
+      (optional)                                (ye repo)
+             └────────────── shared ROOM_KEY_SECRET ──────────────┘
+```
+
+**Flow:**
+1. Koi key bhejta hai (URL `?key=rk1...` ya frontend ke key-gate modal me paste)
+2. Server `POST /api/room/verify` pe verify karta hai → `{ok, created, room}`
+3. Verify pass → `GET /events/chat?key=rk1...` stream khulta hai, chat live 🎉
+
+**Naam se login + key se room:** `sid` cookie = user identity (room se independent). Room **hamesha key se** derive hota hai, isliye ek user ek hi time pe multiple rooms me ho sakta hai (multi-tab safe).
+
+**Secret:** `ROOM_KEY_SECRET` dono servers pe same hona chahiye — key-issuer aur chat server. Secret badla → purane saare keys invalid.
+
+**Key generate karo:**
+```bash
+ROOM_KEY_SECRET=$(openssl rand -hex 32) node scripts/make-room-key.js \
+  --id match-1024 --name "IND vs AUS — 2nd ODI" --ttl 7d
+# rk1.AbCd...xyz
+```
+
+**Wire format, error codes, Python issuer, rotation — sab detail me [`PROTOCOL.md`](./PROTOCOL.md) me hai.** 👈
 
 ---
 
@@ -82,18 +118,24 @@ curl localhost:8080/healthz
 | `POST` | `/api/login` | `{"name":"Arjun"}` | Cookie issue karta hai (2-24 chars) |
 | `POST` | `/api/logout` | — | Cookie clear |
 
+### Rooms
+| Method | Path | Kaam |
+|---|---|---|
+| `POST` | `/api/room/verify` | `{"key":"rk1..."}` → verify + lazy create → `{ok, created, room}` |
+| `GET` | `/api/rooms` | Sab rooms + live online count |
+
 ### Chat
 | Method | Path | Kaam |
 |---|---|---|
-| `GET` | `/api/chat/history?channel=main&limit=50` | Last N messages |
-| `GET` | `/api/chat/history?channel=main&since=42` | seq 42 ke baad ke messages (replay) |
-| `POST` | `/api/chat/send` | `{"channel":"main","body":"hello"}` → broadcast |
-| `GET` | `/api/chat/stats?channel=main` | `{online: 12}` |
+| `GET` | `/api/chat/history?key=rk1...&limit=50` | Last N messages |
+| `GET` | `/api/chat/history?key=rk1...&since=42` | seq 42 ke baad ke messages (replay) |
+| `POST` | `/api/chat/send` | `{"key":"rk1...","body":"hello"}` → broadcast |
+| `GET` | `/api/chat/stats?key=rk1...` | `{room, online}` |
 
 ### Streams (SSE)
 | Method | Path | Events |
 |---|---|---|
-| `GET` | `/events/chat?channel=main` | `hello`, `chat`, `presence` |
+| `GET` | `/events/chat?key=rk1...` | `hello`, `chat`, `presence` |
 | `GET` | `/events/score` | `score` |
 
 ### Admin
@@ -115,7 +157,7 @@ Har event aisa dikhta hai:
 ```
 id: 42
 event: chat
-data: {"seq":42,"channel":"main","userId":"u_ab12","name":"Arjun","body":"hi","ts":1730000000000}
+data: {"seq":42,"room":"match-1024","userId":"u_ab12","name":"Arjun","body":"hi","ts":1730000000000}
 
 ```
 
@@ -125,7 +167,8 @@ data: {"seq":42,"channel":"main","userId":"u_ab12","name":"Arjun","body":"hi","t
 
 ### Browser me subscribe
 ```js
-const es = new EventSource('/events/chat?channel=main');
+const key = 'rk1.AbCd...';                       // room access key
+const es = new EventSource(`/events/chat?key=${encodeURIComponent(key)}`);
 
 es.addEventListener('chat', (e) => {
   const msg = JSON.parse(e.data);
@@ -140,14 +183,15 @@ es.addEventListener('error', () => {
   // browser khud reconnect karega, kuch karne ki zaroorat nahi
 });
 ```
-> ⚠️ `EventSource` custom headers nahi bhej sakta — isliye auth **cookie** se hota hai, token se nahi.
+> ⚠️ `EventSource` custom headers nahi bhej sakta — isliye auth **cookie** se hota hai, room `?key=` query se.
 
 ### Message bhejna
 ```js
 await fetch('/api/chat/send', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ channel: 'main', body: 'hello' }),
+  credentials: 'include',                        // cookie (login) zaroori
+  body: JSON.stringify({ key, body: 'hello' }),
 });
 ```
 
@@ -282,14 +326,14 @@ const n = new EventSource('/events/notify');
 n.addEventListener('notify', (e) => showToast(JSON.parse(e.data)));
 ```
 
-`Hub` khud rooms handle karta hai (`chat:main`, `chat:hindi`, etc.) — alag channels free hain.
+`Hub` khud rooms handle karta hai (`chat:<rid>` per room) — alag streams/rooms free hain.
 
 ---
 
 ## Scaling notes 📈
 
 - **1 server, 512MB RAM:** ~5,000-10,000 idle SSE connections aaram se. 100 users = mushkil se 50MB.
-- **Multiple channels:** `/api/chat/send` me `channel` bhejo. Har channel apna room hai.
+- **Multiple rooms:** har room apni `rid` + RAK key pe alag hai. Ek user multi-tab me multiple rooms me ho sakta hai.
 - **Bahut zyada users (>10k):** SSE edge (Cloudflare/Fly) + multiple Node instances + Redis pub/sub for `hub.emit` fan-out.
 - **SQLite:** single-writer, isliye writes serialized. Chat me problem nahi. Agar 10k msgs/sec chahiye to Postgres + LISTEN/NOTIFY.
 - **OS tuning:** `worker_rlimit_nofile 8192` (nginx) + `LimitNOFILE=8192` (systemd) me set hai.
@@ -306,6 +350,9 @@ n.addEventListener('notify', (e) => showToast(JSON.parse(e.data)));
 | Login ke baad bhi "login required" | `COOKIE_SECURE=false` (http) ya HTTPS pe daalo |
 | Cookie set nahi ho raha HTTPS pe | `COOKIE_SECURE=true` aur nginx `X-Forwarded-Proto` bhej raha ho |
 | Reconnect pe purane messages dobara | Client-side seq dedupe (frontend me already hai) |
+| `403 bad_signature` / `bad_format` | Key corrupt hai ya `ROOM_KEY_SECRET` issuer se match nahi karta |
+| `400 no_key` | Key bheji hi nahi gayi (aur `DEFAULT_ROOM` bhi empty hai) |
+| `500 no_secret` | Chat server pe `ROOM_KEY_SECRET` set nahi hai |
 
 ---
 
@@ -313,22 +360,27 @@ n.addEventListener('notify', (e) => showToast(JSON.parse(e.data)));
 
 ```
 live-chat-sse/
-├── server.js              # HTTP server, routes, SSE endpoints
+├── server.js              # HTTP server, routes, room-key resolution, SSE endpoints
 ├── lib/
-│   ├── db.js              # SQLite: messages + bans, replay/history/prune
+│   ├── db.js              # SQLite: messages + bans + rooms, replay/history/prune
+│   ├── roomkey.js         # RAK issue/verify (AES-256-GCM, rk1)
 │   ├── auth.js            # HMAC signed cookie sessions
 │   ├── sse.js             # Hub (rooms) + openStream + heartbeat
 │   └── score.js           # Mock score feed (example 2nd stream)
 ├── public/
-│   ├── index.html         # Chat UI
+│   ├── index.html         # Chat UI + room header + key gate modal
 │   ├── style.css          # Broadcast-lime dark theme
-│   ├── app.js             # 2 EventSource + POST, dedupe, scroll-freeze
+│   ├── app.js             # key gate + 2 EventSource + POST, dedupe, scroll-freeze
 │   ├── favicon.svg
 │   └── fonts/             # Self-hosted woff2 (156K total)
+├── scripts/
+│   └── make-room-key.js   # CLI: room access key mint karo
 ├── deploy/
 │   ├── nginx.conf         # HTTP/2 + SSE-safe proxy config
 │   ├── chat.service       # systemd unit (low-RAM tuned)
 │   └── .env.example
+├── PROTOCOL.md            # RAK spec (issuer + verifier)
+├── .node-version          # 20.18.0 (Render better-sqlite3 fix)
 ├── .gitignore
 └── README.md
 ```

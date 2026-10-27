@@ -6,6 +6,7 @@ const db = require('./lib/db');
 const auth = require('./lib/auth');
 const { Hub, openStream } = require('./lib/sse');
 const { ScoreFeed } = require('./lib/score');
+const roomkey = require('./lib/roomkey');
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
@@ -14,6 +15,9 @@ const CHAT_MAX_LEN = Number(process.env.CHAT_MAX_LEN || 500);
 const RATE_MS = Number(process.env.RATE_MS || 1000);
 const REPLAY_LIMIT = Number(process.env.REPLAY_LIMIT || 100);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const ROOM_KEY_SECRET = process.env.ROOM_KEY_SECRET || '';
+const DEFAULT_ROOM = process.env.DEFAULT_ROOM || '';
+const DEFAULT_ROOM_NAME = process.env.DEFAULT_ROOM_NAME || 'Public chat';
 const MAX_BODY = 8 * 1024;
 
 const hub = new Hub();
@@ -23,8 +27,45 @@ if (process.env.MOCK_SCORE !== 'false') score.startMock(Number(process.env.MOCK_
 const msgLimiter = new Map();
 const loginLimiter = new Map();
 
-const CHANNEL_RE = /^[a-zA-Z0-9_-]{1,32}$/;
+const RID_RE = roomkey.RID_RE;
 const NAME_RE = /^[\p{L}\p{N} _.\-]{2,24}$/u;
+
+// ---- room key resolution ---------------------------------------------------
+// Accepts a Room Access Key from ?key= or the JSON body, verifies it, and
+// lazily creates the room on first sight. Never trusts client-supplied rid/name.
+function resolveRoom(url, body) {
+  const key = (url && url.searchParams.get('key')) || (body && body.key) || '';
+
+  if (key) {
+    let payload;
+    try {
+      payload = roomkey.verifyRoomKey(key, { secret: ROOM_KEY_SECRET });
+    } catch (err) {
+      return { error: err.code || 'invalid_key', message: err.message || 'invalid room key' };
+    }
+    const { room, created } = db.ensureRoom({
+      rid: payload.rid,
+      name: payload.name,
+      meta: payload.meta,
+    });
+    if (created) console.log(`room created: ${room.room_id} — ${room.name}`);
+    return { room, created, keyed: true };
+  }
+
+  if (DEFAULT_ROOM && RID_RE.test(DEFAULT_ROOM)) {
+    const { room } = db.ensureRoom({ rid: DEFAULT_ROOM, name: DEFAULT_ROOM_NAME });
+    return { room, created: false, fallback: true };
+  }
+
+  return { error: 'no_key', message: 'a room key is required' };
+}
+
+function roomDenied(res, resolved) {
+  return json(res, resolved.error === 'no_key' ? 400 : 403, {
+    error: resolved.error,
+    message: resolved.message,
+  });
+}
 
 function rateLimited(map, key, windowMs) {
   const now = Date.now();
@@ -160,13 +201,37 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true }, { 'Set-Cookie': auth.clear(cookieOptions(req)) });
   }
 
+  if (route === 'POST /api/room/verify') {
+    const body = await readBody(req);
+    const resolved = resolveRoom(url, body);
+    if (resolved.error) return roomDenied(res, resolved);
+    const { room, created } = resolved;
+    return json(res, 200, {
+      ok: true,
+      created,
+      room: { id: room.room_id, name: room.name, meta: room.meta, createdAt: room.created_at },
+    });
+  }
+
+  if (route === 'GET /api/rooms') {
+    return json(res, 200, {
+      rooms: db.listRooms(Number(url.searchParams.get('limit') || 50)).map((r) => ({
+        id: r.room_id,
+        name: r.name,
+        online: hub.count(`chat:${r.room_id}`),
+        createdAt: r.created_at,
+      })),
+    });
+  }
+
   if (route === 'GET /api/chat/history') {
-    const channel = url.searchParams.get('channel') || 'main';
-    if (!CHANNEL_RE.test(channel)) return json(res, 400, { error: 'bad channel' });
+    const resolved = resolveRoom(url, null);
+    if (resolved.error) return roomDenied(res, resolved);
+    const rid = resolved.room.room_id;
     const since = Number(url.searchParams.get('since') || 0);
     const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
-    const rows = since > 0 ? db.replay(channel, since, limit) : db.history(channel, limit);
-    return json(res, 200, { messages: rows.map(toWire) });
+    const rows = since > 0 ? db.replay(rid, since, limit) : db.history(rid, limit);
+    return json(res, 200, { room: { id: rid, name: resolved.room.name }, messages: rows.map(toWire) });
   }
 
   if (route === 'POST /api/chat/send') {
@@ -174,14 +239,15 @@ async function handleApi(req, res, url) {
     if (!user) return json(res, 401, { error: 'login required' });
 
     const body = await readBody(req);
-    const channel = String(body.channel || 'main');
-    if (!CHANNEL_RE.test(channel)) return json(res, 400, { error: 'bad channel' });
+    const resolved = resolveRoom(url, body);
+    if (resolved.error) return roomDenied(res, resolved);
+    const rid = resolved.room.room_id;
 
-    if (rateLimited(msgLimiter, `${channel}:${user.uid}`, RATE_MS)) {
+    if (rateLimited(msgLimiter, `${rid}:${user.uid}`, RATE_MS)) {
       return json(res, 429, { error: 'slow down' });
     }
 
-    if (db.isBanned(channel, user.uid)) {
+    if (db.isBanned(rid, user.uid)) {
       return json(res, 403, { error: 'you are muted' });
     }
 
@@ -191,9 +257,9 @@ async function handleApi(req, res, url) {
       return json(res, 400, { error: `max ${CHAT_MAX_LEN} characters` });
     }
 
-    const row = db.insert({ channel, userId: user.uid, name: user.name, body: text });
+    const row = db.insert({ channel: rid, userId: user.uid, name: user.name, body: text });
     const wire = toWire(row);
-    hub.emit(`chat:${channel}`, 'chat', wire, wire.seq);
+    hub.emit(`chat:${rid}`, 'chat', wire, wire.seq);
     return json(res, 200, { ok: true, message: wire });
   }
 
@@ -207,37 +273,51 @@ async function handleApi(req, res, url) {
   }
 
   if (route === 'GET /api/chat/stats') {
-    const channel = url.searchParams.get('channel') || 'main';
-    return json(res, 200, { channel, online: hub.count(`chat:${channel}`) });
+    const resolved = resolveRoom(url, null);
+    if (resolved.error) return roomDenied(res, resolved);
+    const rid = resolved.room.room_id;
+    return json(res, 200, {
+      room: { id: rid, name: resolved.room.name },
+      online: hub.count(`chat:${rid}`),
+    });
   }
 
   return json(res, 404, { error: 'not found' });
 }
 
 function handleChatStream(req, res, url) {
-  const channel = url.searchParams.get('channel') || 'main';
-  if (!CHANNEL_RE.test(channel)) return json(res, 400, { error: 'bad channel' });
+  const resolved = resolveRoom(url, null);
+  if (resolved.error) return roomDenied(res, resolved);
 
-  const key = `chat:${channel}`;
+  const room = resolved.room;
+  const rid = room.room_id;
+  const key = `chat:${rid}`;
   const sinceHeader = Number(req.headers['last-event-id'] || 0);
   const sinceParam = Number(url.searchParams.get('since') || 0);
   const since = Number.isFinite(sinceHeader) && sinceHeader > 0 ? sinceHeader : sinceParam;
 
   openStream(req, res);
 
-  for (const row of db.replay(channel, since, REPLAY_LIMIT)) {
+  for (const row of db.replay(rid, since, REPLAY_LIMIT)) {
     const wire = toWire(row);
     res.write(`id: ${wire.seq}\nevent: chat\ndata: ${JSON.stringify(wire)}\n\n`);
   }
 
   const online = hub.add(key, res);
-  hub.emit(key, 'presence', { online, channel });
+  hub.emit(key, 'presence', { online, room: rid });
+
   const user = auth.sessionFrom(req);
-  res.write(`event: hello\ndata: ${JSON.stringify({ channel, online, me: user ? user.name : null })}\n\n`);
+  res.write(
+    `event: hello\ndata: ${JSON.stringify({
+      room: { id: rid, name: room.name },
+      online,
+      me: user ? user.name : null,
+    })}\n\n`,
+  );
 
   const cleanup = () => {
     const left = hub.remove(key, res);
-    hub.emit(key, 'presence', { online: left, channel });
+    hub.emit(key, 'presence', { online: left, room: rid });
   };
   req.on('close', cleanup);
   res.on('error', cleanup);
@@ -263,7 +343,7 @@ function handleScoreStream(req, res) {
 function toWire(row) {
   return {
     seq: row.seq,
-    channel: row.channel_id,
+    room: row.channel_id,
     userId: row.user_id,
     name: row.name,
     body: row.body,
@@ -291,6 +371,12 @@ server.headersTimeout = 70_000;
 server.listen(PORT, HOST, () => {
   const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
   console.log(`live-chat-sse listening on http://${HOST}:${PORT}  |  rss ${mem}MB  |  db data/chat.db`);
+  if (ROOM_KEY_SECRET) {
+    console.log('room keys: enabled (AES-256-GCM, rk1)');
+  } else {
+    console.log('room keys: DISABLED — set ROOM_KEY_SECRET to accept ?key= room links');
+  }
+  if (DEFAULT_ROOM) console.log(`default room fallback: ${DEFAULT_ROOM}`);
 });
 
 let closing = false;

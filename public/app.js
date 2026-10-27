@@ -1,11 +1,14 @@
 const $ = (id) => document.getElementById(id);
 
-const CHANNEL = 'main';
 const MAX_NODES = 350;
 const RATE_MS = 1100;
+const KEY_STORE = 'livchat.roomkey';
 
 const state = {
   user: null,
+  key: null,
+  room: null,
+  chatEs: null,
   seen: new Set(),
   frozen: false,
   unread: 0,
@@ -23,11 +26,18 @@ const els = {
   count: $('count'),
   jump: $('jump'),
   composer: $('composer'),
-  modal: $('nameModal'),
+  keyModal: $('keyModal'),
+  keyForm: $('keyForm'),
+  keyInput: $('keyInput'),
+  keyError: $('keyError'),
+  nameModal: $('nameModal'),
   nameForm: $('nameForm'),
   nameInput: $('nameInput'),
   nameError: $('nameError'),
   changeName: $('changeName'),
+  leaveRoom: $('leaveRoom'),
+  roomName: $('roomName'),
+  roomId: $('roomId'),
   chatStatus: $('chatStatus'),
   feedStatus: $('feedStatus'),
   feedNote: $('feedNote'),
@@ -37,9 +47,25 @@ function setStatus(el, stateName) {
   el.dataset.state = stateName;
 }
 
-/* ---------------- second SSE stream (your existing feed) ---------------- */
-/* Chat ke saath ye doosra EventSource chalta hai — same HTTP/2 connection.
-   Yahan bas "alive hai" dikha rahe hain; apna score/odds data yahin render karo. */
+function storedKey() {
+  try {
+    return sessionStorage.getItem(KEY_STORE) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveKey(key) {
+  try {
+    if (key) sessionStorage.setItem(KEY_STORE, key);
+    else sessionStorage.removeItem(KEY_STORE);
+  } catch {
+    /* ignore (private mode) */
+  }
+}
+
+/* ---------------- second SSE stream (live score) ---------------- */
+/* Room chat ke saath ye doosra EventSource chalta hai — same HTTP/2 connection. */
 
 function connectFeed() {
   const es = new EventSource('/events/score');
@@ -52,7 +78,7 @@ function connectFeed() {
   es.addEventListener('error', () => {
     state.feedDown = true;
     setStatus(els.feedStatus, 'connecting');
-    els.feedNote.textContent = 'feed reconnecting…';
+    els.feedNote.textContent = 'feed reconnecting...';
     els.feedNote.className = 'feed-note bad';
   });
 
@@ -79,10 +105,72 @@ function renderFeedNote() {
 
 setInterval(renderFeedNote, 1000);
 
+/* ---------------- room key ---------------- */
+
+function renderRoom() {
+  if (!state.room) return;
+  els.roomName.textContent = state.room.name || state.room.id;
+  els.roomId.textContent = state.room.id ? `#${state.room.id}` : '';
+  els.leaveRoom.hidden = false;
+}
+
+async function verifyKey(key) {
+  try {
+    const res = await fetch('/api/room/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+      credentials: 'include',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.message || data.error || 'invalid key' };
+
+    state.key = key;
+    state.room = data.room;
+    saveKey(key);
+    renderRoom();
+    return { ok: true, created: !!data.created };
+  } catch {
+    return { ok: false, error: 'network error, try again' };
+  }
+}
+
+function openKeyModal() {
+  els.keyError.hidden = true;
+  els.keyModal.hidden = false;
+  setTimeout(() => els.keyInput.focus(), 50);
+}
+
+els.keyForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const key = els.keyInput.value.trim();
+  if (key.length < 8) return showKeyError('that does not look like a room key');
+
+  const btn = els.keyForm.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  els.keyError.hidden = true;
+
+  const result = await verifyKey(key);
+  btn.disabled = false;
+
+  if (!result.ok) return showKeyError(result.error);
+
+  els.keyModal.hidden = true;
+  els.keyInput.value = '';
+  startChat();
+});
+
+function showKeyError(msg) {
+  els.keyError.textContent = msg;
+  els.keyError.hidden = false;
+}
+
 /* ---------------- chat SSE ---------------- */
 
 function connectChat() {
-  const es = new EventSource(`/events/chat?channel=${CHANNEL}`);
+  if (state.chatEs) state.chatEs.close();
+  const es = new EventSource(`/events/chat?key=${encodeURIComponent(state.key)}`);
+  state.chatEs = es;
 
   es.addEventListener('open', () => setStatus(els.chatStatus, 'live'));
   es.addEventListener('error', () => {
@@ -96,6 +184,11 @@ function connectChat() {
   es.addEventListener('hello', (e) => {
     const data = JSON.parse(e.data);
     setOnline(data.online);
+    if (data.room) {
+      state.room = data.room;
+      renderRoom();
+    }
+    if (data.me && !state.user) setUser({ name: data.me });
     setStatus(els.chatStatus, 'live');
   });
 }
@@ -207,6 +300,8 @@ els.input.addEventListener('input', () => {
 els.composer.addEventListener('submit', async (e) => {
   e.preventDefault();
 
+  if (!state.key) return openKeyModal();
+
   if (!state.user) {
     openNameModal();
     return;
@@ -225,7 +320,7 @@ els.composer.addEventListener('submit', async (e) => {
     const res = await fetch('/api/chat/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: CHANNEL, body }),
+      body: JSON.stringify({ key: state.key, body }),
       credentials: 'include',
     });
 
@@ -270,7 +365,7 @@ function setUser(user) {
   els.input.disabled = !user;
   els.send.disabled = !user;
   els.changeName.hidden = !user;
-  els.input.placeholder = user ? 'Say something…' : 'Set a name to chat';
+  els.input.placeholder = user ? 'Say something...' : 'Set a name to chat';
   if (user) {
     els.input.focus();
     for (const li of els.msgs.children) {
@@ -281,7 +376,7 @@ function setUser(user) {
 
 function openNameModal() {
   els.nameError.hidden = true;
-  els.modal.hidden = false;
+  els.nameModal.hidden = false;
   setTimeout(() => els.nameInput.focus(), 50);
 }
 
@@ -305,7 +400,7 @@ els.nameForm.addEventListener('submit', async (e) => {
     if (!res.ok) return showNameError(data.error || 'could not join');
 
     setUser(data.user);
-    els.modal.hidden = true;
+    els.nameModal.hidden = true;
     els.nameInput.value = '';
   } catch {
     showNameError('network error, try again');
@@ -325,6 +420,25 @@ els.changeName.addEventListener('click', async () => {
   openNameModal();
 });
 
+els.leaveRoom.addEventListener('click', () => {
+  if (state.chatEs) {
+    state.chatEs.close();
+    state.chatEs = null;
+  }
+  saveKey('');
+  state.key = null;
+  state.room = null;
+  state.seen.clear();
+  els.msgs.replaceChildren();
+  els.roomName.textContent = 'Waiting for a room key…';
+  els.roomId.textContent = '';
+  els.leaveRoom.hidden = true;
+  els.online.textContent = '0';
+  setStatus(els.chatStatus, 'connecting');
+  setUser(null);
+  openKeyModal();
+});
+
 /* ---------------- clock ---------------- */
 
 function clockTime(ts) {
@@ -336,10 +450,8 @@ function clockTime(ts) {
 
 /* ---------------- boot ---------------- */
 
-(async function boot() {
-  connectFeed();
+async function startChat() {
   connectChat();
-
   try {
     const res = await fetch('/api/me', { credentials: 'include' });
     const data = await res.json();
@@ -352,4 +464,24 @@ function clockTime(ts) {
   } catch {
     openNameModal();
   }
+}
+
+(async function boot() {
+  connectFeed();
+
+  const urlKey = new URLSearchParams(location.search).get('key');
+  const key = urlKey || storedKey();
+
+  if (key) {
+    const result = await verifyKey(key);
+    if (result.ok) {
+      els.keyModal.hidden = true;
+      return startChat();
+    }
+    saveKey('');
+    showKeyError(result.error);
+  }
+
+  setUser(null);
+  openKeyModal();
 })();
