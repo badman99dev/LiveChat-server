@@ -184,7 +184,7 @@ karta hai (local testing ke liye):
 ```js
 // config.js
 IDENTITY_URL:          'https://blazemovies.badman993944.workers.dev/v1/internal/chat-identity'
-IDENTITY_SECRET:       '<must equal CHAT_IDENTITY_SECRET on the backend>'
+IDENTITY_SECRET:       <same value as ROOM_KEY_SECRET — ek hi shared secret>
 IDENTITY_REQUIRED:     false     // true = purane builds (bina identity) reject
 IDENTITY_CACHE_MS:     300000    // verified combo TTL (5 min)
 IDENTITY_NEGATIVE_MS:  30000     // rejection TTL
