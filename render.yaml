@@ -33,30 +33,8 @@ services:
         value: "true"
       - key: SESSION_SECRET
         generateValue: true
-      # SHARED with the key-issuer server. Set the SAME value on both.
-      # generateValue works for a single service; for two services copy one
-      # value across them. Leave unset to disable ?key= room links.
-      - key: ROOM_KEY_SECRET
-        value: "6239a3b9744a5586c88853c1e5d66a634b60daac2380be38fbc85a892411eece"
-      # Client identity — the app sends its Firebase ID token + unique handle on
-      # every request and this server verifies both against the BlazeMovies
-      # identity endpoint. IDENTITY_SECRET must equal CHAT_IDENTITY_SECRET there.
-      - key: IDENTITY_URL
-        value: https://blazemovies.badman993944.workers.dev/v1/internal/chat-identity
-      - key: IDENTITY_SECRET
-        sync: false
-      # "false" = old builds (no headers) keep working with client-typed names.
-      # Flip to "true" once every shipped client sends identity.
-      - key: IDENTITY_REQUIRED
-        value: "false"
-      # Per-IP budget for NEW (jwt + handle) combinations. Already-verified
-      # combinations are served from cache and never touch this budget.
-      - key: IDENTITY_COMBO_MAX
-        value: "10"
-      - key: IDENTITY_COMBO_WINDOW_MS
-        value: "1800000"
-      - key: IDENTITY_NEGATIVE_MS
-        value: "30000"
+      # Client identity + room-key secret + tuning live in config.js (hardcoded).
+      # Only override with env vars if you know why you need to.
       # optional public room when no key is supplied; blank = keys only
       - key: DEFAULT_ROOM
         value: ""

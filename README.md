@@ -177,16 +177,22 @@ the extra hop costs one call per few minutes — not one per message.
 When the identity is verified the chat session's uid **is the Firebase uid**, so
 mutes / bans / reports follow the account instead of one socket.
 
-| Var | Default | Meaning |
-|---|---|---|
-| `IDENTITY_URL` | set in `render.yaml` | identity endpoint |
-| `IDENTITY_SECRET` | — | shared secret, must match `CHAT_IDENTITY_SECRET` on the backend |
-| `IDENTITY_REQUIRED` | `false` | `true` = reject clients that send no identity at all |
-| `IDENTITY_CACHE_MS` | `300000` | positive verification TTL, per (jwt + handle) combination |
-| `IDENTITY_NEGATIVE_MS` | `30000` | cached rejection TTL (stops retry hammering) |
-| `IDENTITY_COMBO_MAX` | `10` | **new** combinations allowed per IP per window |
-| `IDENTITY_COMBO_WINDOW_MS` | `1800000` | window length (30 min) |
-| `IDENTITY_TIMEOUT_MS` | `4000` | upstream call timeout |
+Sab kuch **`config.js`** me hardcoded hai — deploy ke liye koi env var set
+karne ki zarurat nahi. Env var (same naam) set karne par wo config ko override
+karta hai (local testing ke liye):
+
+```js
+// config.js
+IDENTITY_URL:          'https://blazemovies.badman993944.workers.dev/v1/internal/chat-identity'
+IDENTITY_SECRET:       '<must equal CHAT_IDENTITY_SECRET on the backend>'
+IDENTITY_REQUIRED:     false     // true = purane builds (bina identity) reject
+IDENTITY_CACHE_MS:     300000    // verified combo TTL (5 min)
+IDENTITY_NEGATIVE_MS:  30000     // rejection TTL
+IDENTITY_COMBO_MAX:    10        // NEW combos per IP ...
+IDENTITY_COMBO_WINDOW_MS: 1800000 // ... per 30 min
+IDENTITY_TIMEOUT_MS:   4000
+ROOM_KEY_SECRET:       '...'     // same as the Cricfy issuer
+```
 
 Caching is keyed by the **(jwt + handle) combination**, so the same person costs
 one upstream call, not one per message. A new combination is verified again, and
