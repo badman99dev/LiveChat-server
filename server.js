@@ -18,6 +18,9 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const ROOM_KEY_SECRET = process.env.ROOM_KEY_SECRET || '';
 const DEFAULT_ROOM = process.env.DEFAULT_ROOM || '';
 const DEFAULT_ROOM_NAME = process.env.DEFAULT_ROOM_NAME || 'Public chat';
+const RETENTION_MINUTES = Number(process.env.RETENTION_MINUTES ?? 10);
+const ROOM_IDLE_MINUTES = Number(process.env.ROOM_IDLE_MINUTES ?? 30);
+const PRUNE_INTERVAL_MS = Number(process.env.PRUNE_INTERVAL_MS ?? 30_000);
 const MAX_BODY = 8 * 1024;
 
 const hub = new Hub();
@@ -49,11 +52,13 @@ function resolveRoom(url, body) {
       meta: payload.meta,
     });
     if (created) console.log(`room created: ${room.room_id} — ${room.name}`);
+    db.touchRoom(room.room_id);
     return { room, created, keyed: true };
   }
 
   if (DEFAULT_ROOM && RID_RE.test(DEFAULT_ROOM)) {
     const { room } = db.ensureRoom({ rid: DEFAULT_ROOM, name: DEFAULT_ROOM_NAME });
+    db.touchRoom(room.room_id);
     return { room, created: false, fallback: true };
   }
 
@@ -65,6 +70,21 @@ function roomDenied(res, resolved) {
     error: resolved.error,
     message: resolved.message,
   });
+}
+
+// ---- retention & room expiry ----------------------------------------------
+// Messages older than RETENTION_MINUTES are dropped. A room that sees no
+// activity (key verify / history / send / SSE connect) for ROOM_IDLE_MINUTES is
+// closed: its row + messages are deleted and every connected stream gets a
+// final `room` event. The key stays valid — reusing it lazily reopens the room.
+function sweep() {
+  const messages = db.pruneMessages(RETENTION_MINUTES * 60_000);
+  const closed = db.pruneIdleRooms(ROOM_IDLE_MINUTES * 60_000);
+  for (const rid of closed) {
+    hub.closeRoom(`chat:${rid}`, 'room', { closed: true, reason: 'idle', id: rid });
+    console.log(`room closed (idle > ${ROOM_IDLE_MINUTES}m): ${rid}`);
+  }
+  if (messages) console.log(`pruned ${messages} message(s) older than ${RETENTION_MINUTES}m`);
 }
 
 function rateLimited(map, key, windowMs) {
@@ -220,6 +240,7 @@ async function handleApi(req, res, url) {
         name: r.name,
         online: hub.count(`chat:${r.room_id}`),
         createdAt: r.created_at,
+        lastActivityAt: r.last_activity_at,
       })),
     });
   }
@@ -368,6 +389,9 @@ const server = http.createServer(async (req, res) => {
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 70_000;
 
+const sweepTimer = setInterval(sweep, PRUNE_INTERVAL_MS);
+sweepTimer.unref();
+
 server.listen(PORT, HOST, () => {
   const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
   console.log(`live-chat-sse listening on http://${HOST}:${PORT}  |  rss ${mem}MB  |  db data/chat.db`);
@@ -377,6 +401,9 @@ server.listen(PORT, HOST, () => {
     console.log('room keys: DISABLED — set ROOM_KEY_SECRET to accept ?key= room links');
   }
   if (DEFAULT_ROOM) console.log(`default room fallback: ${DEFAULT_ROOM}`);
+  console.log(
+    `retention: messages ${RETENTION_MINUTES}m  |  room idle close ${ROOM_IDLE_MINUTES}m  |  sweep every ${PRUNE_INTERVAL_MS / 1000}s`,
+  );
 });
 
 let closing = false;
@@ -384,8 +411,9 @@ function shutdown(signal) {
   if (closing) return;
   closing = true;
   console.log(`${signal} received, draining connections...`);
+  clearInterval(sweepTimer);
   hub.closeAll();
-  db.prune(7);
+  db.pruneMessages(RETENTION_MINUTES * 60_000);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000).unref();
 }

@@ -51,6 +51,15 @@ services:
         value: "1000"
       - key: REPLAY_LIMIT
         value: "100"
+      # retention: delete messages older than this (minutes)
+      - key: RETENTION_MINUTES
+        value: "10"
+      # close a room after this many minutes with no activity (0 = never)
+      - key: ROOM_IDLE_MINUTES
+        value: "30"
+      # sweeper interval (ms)
+      - key: PRUNE_INTERVAL_MS
+        value: "30000"
       # writable location inside the Render container
       - key: DATA_DIR
         value: /opt/render/project/src/data

@@ -181,6 +181,11 @@ function connectChat() {
 
   es.addEventListener('presence', (e) => setOnline(JSON.parse(e.data).online));
 
+  es.addEventListener('room', (e) => {
+    const data = JSON.parse(e.data);
+    if (data && data.closed) roomClosed(data.reason);
+  });
+
   es.addEventListener('hello', (e) => {
     const data = JSON.parse(e.data);
     setOnline(data.online);
@@ -195,6 +200,30 @@ function connectChat() {
 
 function setOnline(n) {
   els.online.textContent = String(n ?? 0);
+}
+
+// Server closed the room after a long idle spell. Drop the stream and send the
+// user back to the key gate (key prefilled) so they can reopen it if they want.
+function roomClosed(reason) {
+  if (state.chatEs) {
+    state.chatEs.close();
+    state.chatEs = null;
+  }
+  const key = state.key;
+  state.room = null;
+  state.seen.clear();
+  els.msgs.replaceChildren();
+  els.roomName.textContent = 'Room closed';
+  els.roomId.textContent = '';
+  els.online.textContent = '0';
+  setStatus(els.chatStatus, 'down');
+  els.keyInput.value = key || '';
+  openKeyModal();
+  showKeyError(
+    reason === 'idle'
+      ? 'This room closed after being idle. Submit the key again to reopen it.'
+      : 'This room is no longer available.',
+  );
 }
 
 function addMessage(m) {

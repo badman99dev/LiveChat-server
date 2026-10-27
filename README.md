@@ -20,6 +20,7 @@ Room me entry **Room Access Key (RAK)** se hoti hai — dekho [Room Access Keys]
 
 - **SSE chat** — server → client push, browser khud reconnect karta hai
 - **Room Access Keys (RAK)** — encrypted `rk1...` key me room id + name, lazy room create, multi-use
+- **Auto retention** — 10 min purane messages delete, 30 min idle room auto-close (configurable)
 - **Free gap-fill** — `Last-Event-ID` header se miss hui messages apne aap replay
 - **Do parallel streams** — chat + score ek hi connection pe (HTTP/2 multiplexing)
 - **Cookie auth** — HMAC-signed `sid` cookie, koi JWT library nahi
@@ -76,6 +77,29 @@ curl localhost:8080/healthz
 | `ROOM_KEY_SECRET` | `` (empty) | **RAK ke liye.** Shared secret (64-hex ya base64 ya koi bhi string). Empty = keys band |
 | `DEFAULT_ROOM` | `` (empty) | Key na ho to fallback room id (dev/demo). Empty = sirf key-based rooms |
 | `DEFAULT_ROOM_NAME` | `Public chat` | Fallback room ka display naam |
+| `RETENTION_MINUTES` | `10` | Isse purane messages delete (10 min ka chat retention) |
+| `ROOM_IDLE_MINUTES` | `30` | Itni der koi activity na ho to room **close** (row + messages delete). `0` = kabhi nahi |
+| `PRUNE_INTERVAL_MS` | `30000` | Sweeper kitni der me chale (ms) |
+
+---
+
+## Retention & room lifespan ⏳
+
+Do cheezein **sweeper** (har `PRUNE_INTERVAL_MS`, default 30s) handle karta hai:
+
+| Cheez | Rule | Default |
+|---|---|---|
+| **Messages** | `created_at` isse purana → **delete** | `RETENTION_MINUTES=10` → last **10 min** ka chat |
+| **Rooms** | Koi **activity** nahi → room **close** (row + uske messages delete) | `ROOM_IDLE_MINUTES=30` → **30 min** idle pe close |
+
+**Activity kya maana jaata hai?** Room ka koi bhi touch: key verify, `/api/chat/history`, message send, ya SSE connect. Jo room 30 min tak chhua nahi gaya, wo band.
+
+**Room close hone pe:**
+- `rooms` row + uske saare messages delete (`bans` chhod ke).
+- Connected clients ko final SSE `event: room` `{closed:true, reason:"idle"}` jaata hai → frontend key gate pe wapas, "room closed" notice ke saath.
+- Key **valid rehta hai** — wahi key dobara bhejo to room **lazily reopen** ho jaata hai (fresh room, khaali chat).
+
+> 💡 `ROOM_IDLE_MINUTES=0` set karo → rooms kabhi auto-close nahi honge (sirf 10-min message retention lagegi).
 
 ---
 

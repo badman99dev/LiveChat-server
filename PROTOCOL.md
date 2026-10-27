@@ -116,7 +116,24 @@ client key bhejta hai
 - **Same rid, different key** → bhi same room (rid hi identity hai).
 - Room ka `name`/`meta` **pehli baar** banate waqt set hota hai; baad me overwrite
   nahi hota (predictable). Name badalna ho to room id naya do ya DB me update karo.
-- Room **delete** nahi hota; messages `prune` hote hain (default 7 din).
+
+### Retention & idle close
+
+Sweeper (default har 30s) do cheezein karta hai:
+
+| Cheez | Rule | Env |
+|---|---|---|
+| Messages | `created_at` purana → delete | `RETENTION_MINUTES` (default **10**) |
+| Rooms | Activity nahi → room **CLOSE** (row + uske messages delete) | `ROOM_IDLE_MINUTES` (default **30**) |
+
+- **Activity** = key verify, `/api/chat/history`, message send, ya SSE connect
+  (jo bhi room ko touch kare).
+- Room close hone pe connected clients ko `event: room` `{closed:true,reason:"idle"}`
+  milta hai; `rooms` row + uske messages chale jaate hain (`bans` rehte hain).
+- **Key valid rehti hai** — wahi key dobara bhejo to room **lazily reopen** hota hai
+  (naya khaali room). Isliye key ko "permanent room" ki tarah treat na karo, wo
+  entry ticket hai.
+- Idle closing band karni ho to `ROOM_IDLE_MINUTES=0`.
 
 ---
 
