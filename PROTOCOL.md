@@ -65,8 +65,8 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
 | `name` | string | ✅ | 1–64 chars — room display name |
 | `iat` | int | ✅ | issued-at, unix **seconds** |
 | `openAt` | int | ❌ | isse pehle room khulega hi nahi (`now < openAt` → `not_yet`) |
-| `closeAt` | int | ❌ | is waqt room **force-close**; uske baad key sirf ENTER kar sakti hai, reopen nahi |
-| `exp` | int | ❌ | unix seconds; **key** khud expire (agar `now > exp` → `expired`, poori key reject) |
+| `closeAt` | int | ❌ | **issuer ka room order**: is waqt room **force-close**; uske baad key sirf ENTER, reopen nahi |
+| `exp` | int | ❌ | **key ka apna order**: key kab tak valid (agar `now > exp` → `expired`, poori key reject) |
 | `meta` | object | ❌ | client ko wapas milta hai (icon, kind, etc.) |
 
 ### Room window (`openAt` / `closeAt`) — dono optional, ek akela bhi chalega
@@ -86,7 +86,11 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
   - Dobara kholne ki koshish → **`room_not_exist`** (404). Room `entries` ke liye bhi nahi milega.
 - `exp` alag cheez hai — wo **poori key** ko maar deta hai (`expired`), jabki `closeAt` sirf room band karta hai.
 
-> `closeAt` ke baad key zinda rehti hai (verify pass), bas uske paas **room kholne ka haq nahi** — sirf jo room already khula ho usme enter. Isliye "window khatm = key khatm" nahi, "window khatm = room khatm" hai.
+> **`exp` aur `closeAt` do alag orders hain:**
+> - `exp` = **key ka order** — key ki apni validity. Uske baad key poori tarah dead (`expired`), kisi bhi room ke liye.
+> - `closeAt` = **issuer server ka order** — room ko band karne ka hukm. Uske baad key zinda rehti hai (verify pass), bas uske paas **room kholne ka haq nahi** — sirf jo room already khula ho usme enter.
+>
+> Isliye "window khatm = key khatm" nahi, "window khatm = **room** khatm" hai. Agar issuer ko key bhi wahin maarni ho to `exp = closeAt` set kar do.
 
 > ⚠️ Room identity `rid` hai. Ek hi `rid` ke do keys ho (ek `closeAt` ke saath, ek bina) to jo bhi request pehle aayegi apne hisaab se room ko close/open karegi — strictest window jeetegi.
 
