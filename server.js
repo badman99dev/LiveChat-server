@@ -58,7 +58,7 @@ const NAME_RE = /^[\p{L}\p{N} _.\-]{2,24}$/u;
 function resolveRoom(url, body) {
   const key = (url && url.searchParams.get('key')) || (body && body.key) || '';
 
-  if (key) {
+  if (key && key.startsWith('rk1.')) {
     let payload;
     try {
       payload = roomkey.verifyRoomKey(key, { secret: ROOM_KEY_SECRET });
@@ -117,6 +117,23 @@ function resolveRoom(url, body) {
 
     db.touchRoom(room.room_id);
     return { room, created, keyed: true };
+  }
+
+  const explicitRid = (url && (url.searchParams.get('rid') || url.searchParams.get('room'))) || (body && (body.rid || body.room)) || '';
+  const rawRid = (key && !key.startsWith('rk1.')) ? key : explicitRid;
+  if (rawRid) {
+    const cleanRid = String(rawRid).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    if (cleanRid) {
+      const roomName = (url && url.searchParams.get('name')) || (body && body.name) || cleanRid;
+      const roomType = (url && url.searchParams.get('type')) || (body && body.type) || (cleanRid.startsWith('sports') ? 'sports' : 'general');
+      const res = db.ensureRoom({
+        rid: cleanRid,
+        name: roomName,
+        type: roomType,
+      });
+      db.touchRoom(res.room.room_id);
+      return { room: res.room, created: res.created, keyed: false };
+    }
   }
 
   if (DEFAULT_ROOM && RID_RE.test(DEFAULT_ROOM)) {
