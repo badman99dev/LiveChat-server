@@ -155,6 +155,53 @@ node scripts/make-room-key.js --id final-1 --name "Final" --type football \
 
 ---
 
+## 🔐 Client identity (Firebase JWT + handle)
+
+Every request the app makes carries two headers:
+
+```
+Authorization: Bearer <firebase id token>
+X-Chat-Handle:  <server-assigned handle, e.g. rahul_k7x2>
+```
+
+This server verifies **both** against the BlazeMovies identity endpoint
+(`POST /v1/internal/chat-identity`, shared-secret protected) and then uses the
+**canonical handle from that response** — a client-typed display name is never
+trusted, so nobody can post under someone else's handle.
+
+Verified on: `POST /api/login`, `POST /api/chat/send`, `POST /api/chat/react`,
+`GET /events/chat` (a failed check gets a terminal `denied` event) and `GET /api/me`.
+Results are cached in-process per token (`IDENTITY_CACHE_MS`, default 5 min), so
+the extra hop costs one call per few minutes — not one per message.
+
+When the identity is verified the chat session's uid **is the Firebase uid**, so
+mutes / bans / reports follow the account instead of one socket.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `IDENTITY_URL` | set in `render.yaml` | identity endpoint |
+| `IDENTITY_SECRET` | — | shared secret, must match `CHAT_IDENTITY_SECRET` on the backend |
+| `IDENTITY_REQUIRED` | `false` | `true` = reject clients that send no identity at all |
+| `IDENTITY_CACHE_MS` | `300000` | positive verification TTL |
+| `IDENTITY_TIMEOUT_MS` | `4000` | upstream call timeout |
+
+**Rollout:** keep `IDENTITY_REQUIRED=false` while older builds (no headers) are
+in use — they keep working with the legacy client-typed name. Flip to `true`
+once every shipped client sends identity.
+
+Backend contract (BlazeMovies):
+
+```jsonc
+POST /v1/internal/chat-identity
+X-Identity-Secret: <CHAT_IDENTITY_SECRET>
+{"jwt":"<firebase id token>","handle":"rahul_k7x2"}
+
+200 {"status":"success","data":{"uid":"...","handle":"rahul_k7x2","email_verified":true}}
+401 invalid/expired jwt · 403 wrong secret or handle mismatch · 503 not configured
+```
+
+---
+
 ## API endpoints 🔌
 
 ### Auth
