@@ -182,8 +182,18 @@ mutes / bans / reports follow the account instead of one socket.
 | `IDENTITY_URL` | set in `render.yaml` | identity endpoint |
 | `IDENTITY_SECRET` | — | shared secret, must match `CHAT_IDENTITY_SECRET` on the backend |
 | `IDENTITY_REQUIRED` | `false` | `true` = reject clients that send no identity at all |
-| `IDENTITY_CACHE_MS` | `300000` | positive verification TTL |
+| `IDENTITY_CACHE_MS` | `300000` | positive verification TTL, per (jwt + handle) combination |
+| `IDENTITY_NEGATIVE_MS` | `30000` | cached rejection TTL (stops retry hammering) |
+| `IDENTITY_COMBO_MAX` | `10` | **new** combinations allowed per IP per window |
+| `IDENTITY_COMBO_WINDOW_MS` | `1800000` | window length (30 min) |
 | `IDENTITY_TIMEOUT_MS` | `4000` | upstream call timeout |
+
+Caching is keyed by the **(jwt + handle) combination**, so the same person costs
+one upstream call, not one per message. A new combination is verified again, and
+each IP gets a budget of `IDENTITY_COMBO_MAX` new combinations per
+`IDENTITY_COMBO_WINDOW_MS` — beyond that the request fails with **429** +
+`retryAfter` (SSE gets `denied` + `retryAfter`). Combinations already verified
+keep working from cache even after the IP hits its budget.
 
 **Rollout:** keep `IDENTITY_REQUIRED=false` while older builds (no headers) are
 in use — they keep working with the legacy client-typed name. Flip to `true`

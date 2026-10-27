@@ -49,6 +49,14 @@ services:
       # Flip to "true" once every shipped client sends identity.
       - key: IDENTITY_REQUIRED
         value: "false"
+      # Per-IP budget for NEW (jwt + handle) combinations. Already-verified
+      # combinations are served from cache and never touch this budget.
+      - key: IDENTITY_COMBO_MAX
+        value: "10"
+      - key: IDENTITY_COMBO_WINDOW_MS
+        value: "1800000"
+      - key: IDENTITY_NEGATIVE_MS
+        value: "30000"
       # optional public room when no key is supplied; blank = keys only
       - key: DEFAULT_ROOM
         value: ""

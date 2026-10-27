@@ -247,6 +247,13 @@ function normalizeText(input) {
     .trim();
 }
 
+// Client IP behind Render's proxy (first hop of X-Forwarded-For), used for the
+// per-address budget of new identity combinations.
+function clientIp(req) {
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xff || req.socket.remoteAddress || '';
+}
+
 function cookieOptions(req) {
   const proto = String(req.headers['x-forwarded-proto'] || '');
   const secure = process.env.COOKIE_SECURE
@@ -303,8 +310,16 @@ async function handleApi(req, res, url) {
   if (route === 'GET /api/me') {
     const user = auth.sessionFrom(req);
     if (user) return json(res, 200, { user: { id: user.uid, name: user.name } });
-    const ident = await identity.verify(req);
+    const ident = await identity.verify(req, clientIp(req));
     if (ident.ok) return json(res, 200, { user: { id: ident.uid, name: ident.handle } });
+    if (ident.code) {
+      return json(
+        res,
+        ident.status || 403,
+        { error: ident.code, message: ident.message, retryAfter: ident.retryAfter },
+        ident.retryAfter ? { 'Retry-After': String(ident.retryAfter) } : {},
+      );
+    }
     return json(res, 200, { user: null });
   }
 
@@ -316,9 +331,14 @@ async function handleApi(req, res, url) {
 
     // A verified identity is authoritative: the display name is never taken
     // from the client when the app proved who it is.
-    const ident = await identity.verify(req);
+    const ident = await identity.verify(req, clientIp(req));
     if (!ident.ok && ident.code) {
-      return json(res, 403, { error: ident.code, message: ident.message });
+      return json(
+        res,
+        ident.status || 403,
+        { error: ident.code, message: ident.message, retryAfter: ident.retryAfter },
+        ident.retryAfter ? { 'Retry-After': String(ident.retryAfter) } : {},
+      );
     }
 
     const name = ident.ok ? ident.handle : normalizeText(body.name);
@@ -411,9 +431,14 @@ async function handleApi(req, res, url) {
 
     // Re-check the identity on write: a stolen/old cookie must not let anyone
     // post under somebody else's handle.
-    const ident = await identity.verify(req);
+    const ident = await identity.verify(req, clientIp(req));
     if (!ident.ok && ident.code) {
-      return json(res, 403, { error: ident.code, message: ident.message });
+      return json(
+        res,
+        ident.status || 403,
+        { error: ident.code, message: ident.message, retryAfter: ident.retryAfter },
+        ident.retryAfter ? { 'Retry-After': String(ident.retryAfter) } : {},
+      );
     }
     const sender = ident.ok ? { uid: ident.uid, name: ident.handle } : user;
 
@@ -458,9 +483,14 @@ async function handleApi(req, res, url) {
     const resolved = resolveRoom(url, body);
     if (resolved.error) return roomDenied(res, resolved);
 
-    const ident = await identity.verify(req);
+    const ident = await identity.verify(req, clientIp(req));
     if (!ident.ok && ident.code) {
-      return json(res, 403, { error: ident.code, message: ident.message });
+      return json(
+        res,
+        ident.status || 403,
+        { error: ident.code, message: ident.message, retryAfter: ident.retryAfter },
+        ident.retryAfter ? { 'Retry-After': String(ident.retryAfter) } : {},
+      );
     }
     const sender = ident.ok ? { uid: ident.uid, name: ident.handle } : user;
 
@@ -510,9 +540,13 @@ async function handleChatStream(req, res, url) {
 
   // The stream is a first-class authenticated request too: a client that fails
   // identity never gets a socket (and never appears in presence).
-  const ident = await identity.verify(req);
+  const ident = await identity.verify(req, clientIp(req));
   if (!ident.ok && ident.code) {
-    return streamDenied(req, res, { error: ident.code, message: ident.message });
+    return streamDenied(req, res, {
+      error: ident.code,
+      message: ident.message,
+      retryAfter: ident.retryAfter ?? null,
+    });
   }
 
   const room = resolved.room;
