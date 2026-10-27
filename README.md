@@ -184,14 +184,15 @@ karta hai (local testing ke liye):
 ```js
 // config.js
 IDENTITY_URL:          'https://blazemovies.badman993944.workers.dev/v1/internal/chat-identity'
-IDENTITY_SECRET:       <same value as ROOM_KEY_SECRET — ek hi shared secret>
+IDENTITY_SECRET:       ''        // env se aata hai (Render: IDENTITY_SECRET)
+                                  // value = BlazeMovies ka CHAT_IDENTITY_SECRET
 IDENTITY_REQUIRED:     false     // true = purane builds (bina identity) reject
 IDENTITY_CACHE_MS:     300000    // verified combo TTL (5 min)
 IDENTITY_NEGATIVE_MS:  30000     // rejection TTL
 IDENTITY_COMBO_MAX:    10        // NEW combos per IP ...
 IDENTITY_COMBO_WINDOW_MS: 1800000 // ... per 30 min
 IDENTITY_TIMEOUT_MS:   4000
-ROOM_KEY_SECRET:       '...'     // same as the Cricfy issuer
+// ROOM_KEY_SECRET config me nahi — Render env (ROOM_KEY_SECRET) se aata hai
 ```
 
 Caching is keyed by the **(jwt + handle) combination**, so the same person costs
