@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07090a" />
+  <meta name="description" content="Live chat over SSE with a POST write path. Single HTTP/2 connection." />
+  <title>Pitchside — Live Chat</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="atmos" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="2.4" fill="currentColor"/>
+        <path d="M6.2 6.2a8.2 8.2 0 0 0 0 11.6M17.8 6.2a8.2 8.2 0 0 1 0 11.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M2.8 2.8a13 13 0 0 0 0 18.4M21.2 2.8a13 13 0 0 1 0 18.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".45"/>
+      </svg>
+      <span class="brand-name">PITCHSIDE</span>
+      <span class="brand-sub">live chat</span>
+    </div>
+
+    <div class="pills" role="status" aria-live="off">
+      <span class="pill" id="feedStatus" data-state="connecting"><i></i><b>FEED</b></span>
+      <span class="pill" id="chatStatus" data-state="connecting"><i></i><b>CHAT</b></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="chat" aria-label="Live chat">
+      <header class="chat-head">
+        <div class="chat-title">
+          <h1>Live Chat</h1>
+          <p>
+            <span class="online-dot"></span><span id="online">0</span> watching
+            <span class="sep">/</span>
+            <span class="feed-note" id="feedNote">feed —</span>
+          </p>
+        </div>
+        <button class="ghost" id="changeName" type="button" hidden>change name</button>
+      </header>
+
+      <div class="chat-body" id="chatBody">
+        <ol class="messages" id="messages" aria-live="polite" aria-relevant="additions"></ol>
+        <button class="jump" id="jump" type="button" hidden>new messages</button>
+      </div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <input
+          class="chat-input"
+          id="input"
+          name="body"
+          type="text"
+          maxlength="500"
+          placeholder="Say something…"
+          aria-label="Message"
+          disabled
+        />
+        <span class="count" id="count"></span>
+        <button class="send" id="send" type="submit" title="Send" aria-label="Send message" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 20.5 4l-4.8 16.5-4.2-6.2L3 11.5Z" fill="currentColor"/></svg>
+        </button>
+      </form>
+    </section>
+  </main>
+
+  <div class="modal" id="nameModal" hidden>
+    <form class="card" id="nameForm">
+      <span class="card-kicker">you're watching</span>
+      <h2>Pick a name<br /><em>for the chat</em></h2>
+      <label class="field">
+        <span>display name</span>
+        <input id="nameInput" type="text" maxlength="24" placeholder="e.g. rahul_77" autocomplete="nickname" required />
+      </label>
+      <p class="error" id="nameError" role="alert" hidden></p>
+      <button class="primary" type="submit">Join chat</button>
+      <p class="card-foot">No signup. A cookie keeps your name on this device.</p>
+    </form>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

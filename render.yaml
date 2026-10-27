@@ -1,0 +1,55 @@
+# Render Blueprint — LiveChat server
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> pick this repo.
+# Render reads this file and provisions everything automatically.
+#
+# NOTE about SQLite on Render:
+#   Render's default filesystem is EPHEMERAL — chat history resets on every
+#   deploy / restart / spin-down.
+#   * Free/Starter without disk  -> ephemeral (fine for a demo)
+#   * Starter + disk (below)     -> history persists forever
+#   To enable persistence, uncomment the `disk:` block and bump `plan: starter`.
+
+services:
+  - type: web
+    name: livechat-server
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      # Render routes traffic to the container on 0.0.0.0
+      - key: HOST
+        value: 0.0.0.0
+      # Render terminates TLS, so cookies must be Secure
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: MOCK_SCORE
+        value: "true"
+      - key: MOCK_SCORE_MS
+        value: "7000"
+      - key: CHAT_MAX_LEN
+        value: "500"
+      - key: RATE_MS
+        value: "1000"
+      - key: REPLAY_LIMIT
+        value: "100"
+      # writable location inside the Render container
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+
+    # ---- persistent disk (needs a PAID instance type) ----
+    # Uncomment to keep chat history across restarts.
+    # disk:
+    #   name: livechat-data
+    #   mountPath: /opt/render/project/src/data
+    #   sizeGB: 1

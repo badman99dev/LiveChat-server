@@ -1,0 +1,31 @@
+[Unit]
+Description=Live chat + score SSE server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chatapp
+Group=chatapp
+WorkingDirectory=/opt/live-chat
+EnvironmentFile=/opt/live-chat/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# low-RAM box tuning
+LimitNOFILE=8192
+MemoryMax=384M
+MemoryHigh=320M
+
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/live-chat/data
+
+[Install]
+WantedBy=multi-user.target
