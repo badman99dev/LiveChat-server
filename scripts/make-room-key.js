@@ -11,6 +11,7 @@
 // Options:
 //   --id,   --room   room id            (required, A-Z a-z 0-9 _ - , max 64)
 //   --name           room display name  (default: same as id)
+//   --type, --topic  room type          (e.g. cricket, football, food)
 //   --open, --start  room may open from this time (default: now)
 //   --close, --end   room force-closes at this time; afterwards the key can
 //                    only ENTER an existing room, never reopen it
@@ -70,7 +71,7 @@ function usage(code) {
     [
       'make-room-key — mint a room access key',
       '',
-      '  node scripts/make-room-key.js --id <room-id> [--name "<Room name>"]',
+      '  node scripts/make-room-key.js --id <room-id> [--name "<Room name>"] [--type cricket]',
       '        [--open +0m | --start <time>] [--close +6h | --end <time>]',
       '        [--ttl <seconds>] [--meta \'{"k":"v"}\'] [--url https://chat.example.com] [--json]',
       '',
@@ -106,11 +107,12 @@ if (typeof args.meta === 'string') {
 
 const openAt = parseTime(args.open ?? args.start);
 const closeAt = parseTime(args.close ?? args.end);
+const type = args.type ?? args.topic ?? null;
 
 let key;
 try {
   key = issueRoomKey(
-    { rid, name: args.name || rid, meta, openAt, closeAt },
+    { rid, name: args.name || rid, type, meta, openAt, closeAt },
     { secret, ttlSeconds: args.ttl ? Number(args.ttl) : undefined },
   );
 } catch (err) {
@@ -130,6 +132,7 @@ if (args.json) {
         room: {
           id: rid,
           name: args.name || rid,
+          type: type ? String(type).toLowerCase() : null,
           openAt: openAt ?? null,
           closeAt: closeAt ?? null,
         },

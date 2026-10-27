@@ -105,6 +105,7 @@ function resolveRoom(url, body) {
       const res = db.ensureRoom({
         rid: payload.rid,
         name: payload.name,
+        type: payload.type,
         meta: payload.meta,
         openAt: payload.openAt,
         closeAt: payload.closeAt,
@@ -319,6 +320,7 @@ async function handleApi(req, res, url) {
       room: {
         id: room.room_id,
         name: room.name,
+        type: room.type,
         meta: room.meta,
         createdAt: room.created_at,
         openAt: room.open_at,
@@ -329,11 +331,14 @@ async function handleApi(req, res, url) {
 
   if (route === 'GET /api/stickers') {
     // Catalogue only — the SVG artwork is served client-side from /stickers/.
-    return json(res, 200, { basePath: '/stickers', stickers: stickers.STICKERS });
+    // ?type=<room type> narrows it to stickers that fit that room.
+    const type = url.searchParams.get('type');
+    return json(res, 200, { basePath: '/stickers', type: type || null, stickers: stickers.stickersFor(type) });
   }
 
   if (route === 'GET /api/reactions') {
-    return json(res, 200, { reactions: reactions.REACTIONS });
+    const type = url.searchParams.get('type');
+    return json(res, 200, { type: type || null, reactions: reactions.reactionsFor(type) });
   }
 
   if (route === 'GET /api/rooms') {
@@ -341,6 +346,7 @@ async function handleApi(req, res, url) {
       rooms: db.listRooms(Number(url.searchParams.get('limit') || 50)).map((r) => ({
         id: r.room_id,
         name: r.name,
+        type: r.type,
         online: hub.count(`chat:${r.room_id}`),
         createdAt: r.created_at,
         lastActivityAt: r.last_activity_at,
@@ -357,7 +363,10 @@ async function handleApi(req, res, url) {
     const since = Number(url.searchParams.get('since') || 0);
     const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
     const rows = since > 0 ? db.replay(rid, since, limit) : db.history(rid, limit);
-    return json(res, 200, { room: { id: rid, name: resolved.room.name }, messages: rows.map(toWire) });
+    return json(res, 200, {
+      room: { id: rid, name: resolved.room.name, type: resolved.room.type },
+      messages: rows.map(toWire),
+    });
   }
 
   if (route === 'POST /api/chat/send') {
@@ -442,7 +451,7 @@ async function handleApi(req, res, url) {
     if (resolved.error) return roomDenied(res, resolved);
     const rid = resolved.room.room_id;
     return json(res, 200, {
-      room: { id: rid, name: resolved.room.name },
+      room: { id: rid, name: resolved.room.name, type: resolved.room.type },
       online: hub.count(`chat:${rid}`),
     });
   }
@@ -474,7 +483,7 @@ function handleChatStream(req, res, url) {
   const user = auth.sessionFrom(req);
   res.write(
     `event: hello\ndata: ${JSON.stringify({
-      room: { id: rid, name: room.name },
+      room: { id: rid, name: room.name, type: room.type },
       online,
       me: user ? user.name : null,
     })}\n\n`,

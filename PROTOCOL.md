@@ -50,6 +50,7 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
   "v": 1,
   "rid": "match-1024",
   "name": "IND vs AUS — 2nd ODI",
+  "type": "cricket",
   "iat": 1761540000,
   "openAt": 1761540000,
   "closeAt": 1761547200,
@@ -63,6 +64,7 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
 | `v` | int | ✅ | `1` |
 | `rid` | string | ✅ | `^[a-zA-Z0-9_-]{1,64}$` — **room id** |
 | `name` | string | ✅ | 1–64 chars — room display name |
+| `type` | string | ❌ | room type (cricket/football/food…), `^[a-z0-9_-]{1,32}$`; stickers/reactions isi se filter |
 | `iat` | int | ✅ | issued-at, unix **seconds** |
 | `openAt` | int | ❌ | isse pehle room khulega hi nahi (`now < openAt` → `not_yet`) |
 | `closeAt` | int | ❌ | **issuer ka room order**: is waqt room **force-close**; uske baad key sirf ENTER, reopen nahi |
@@ -92,6 +94,17 @@ warna `scryptSync(secret, "livechat:roomkey:v1", 32)`.
 >
 > Isliye "window khatm = key khatm" nahi, "window khatm = **room** khatm" hai. Agar issuer ko key bhi wahin maarni ho to `exp = closeAt` set kar do.
 
+### Room type (`type`) — stickers/reactions ka context
+
+`type` batata hai room kis baare me hai. Chat server isse sirf **sticker/reaction
+catalogue filter** karne ke liye use karta hai (`GET /api/stickers?type=...`):
+
+- Universal stickers (jinpe `types` nahi) har room me dikhte hain.
+- Tagged stickers sirf apne type ke room me (jaise `wicket` sirf `cricket` me).
+- `type` na ho ya unknown ho to poora catalogue.
+
+Isse "bhabhi ji ki chaat" room me galti se wicket sticker nahi aata. 😄
+
 > ⚠️ Room identity `rid` hai. Ek hi `rid` ke do keys ho (ek `closeAt` ke saath, ek bina) to jo bhi request pehle aayegi apne hisaab se room ko close/open karegi — strictest window jeetegi.
 
 ---
@@ -108,8 +121,9 @@ Order exactly ye hai:
 6. `v === 1` → `bad_version`
 7. `rid` regex → `bad_room`
 8. `name` 1–64 → `bad_name`
-9. `openAt` / `closeAt` parse (bad time / `closeAt <= openAt`) → `bad_time` / `bad_window`
-10. `exp` present && expired → `expired`
+9. `type` (agar ho) regex → `bad_type`
+10. `openAt` / `closeAt` parse (bad time / `closeAt <= openAt`) → `bad_time` / `bad_window`
+11. `exp` present && expired → `expired`
 
 `bad_signature` pe **timing-safe** hona GCM me built-in hai (tag check constant-time).
 Steps 9–10 se aage badhne wale checks **room policy** hain (verify ke baad, resolveRoom me):
@@ -126,6 +140,7 @@ Steps 9–10 se aage badhne wale checks **room policy** hain (verify ke baad, re
 | `bad_version` | 403 | `v != 1` |
 | `bad_room` | 403 | rid regex fail |
 | `bad_name` | 403 | name missing/too long |
+| `bad_type` | 403 | `type` invalid (1–32 chars `a-z 0-9 _ -`) |
 | `bad_time` | 403 | `openAt`/`closeAt` valid time nahi |
 | `bad_window` | 403 | `closeAt <= openAt` |
 | `expired` | 403 | `exp` nikal gaya (poori key dead) |
@@ -238,6 +253,7 @@ const key = issueRoomKey(
   {
     rid: `match-${match.id}`,
     name: `${match.home} vs ${match.away}`,
+    type: 'cricket',              // optional: room type
     meta: { kind: 'match', sport: 'cricket' },
     openAt: match.startsAt,       // optional: room opens at match start
     closeAt: match.endsAt,        // optional: room closes when match ends
@@ -256,7 +272,7 @@ const key = issueRoomKey(
 ```bash
 # room opens now, force-closes after 6 hours
 ROOM_KEY_SECRET=$SECRET node scripts/make-room-key.js \
-  --id match-1024 --name "IND vs AUS — 2nd ODI" --close +6h \
+  --id match-1024 --name "IND vs AUS — 2nd ODI" --type cricket --close +6h \
   --url https://chat.example.com
 # -> https://chat.example.com/?key=rk1.xj3...
 
@@ -292,10 +308,11 @@ AAD = b'livechat:roomkey:v1'
 B64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
 
 def issue_room_key(rid, name, meta=None, ttl=None, open_at=None, close_at=None,
-                   secret=os.environ['ROOM_KEY_SECRET']):
+                   room_type=None, secret=os.environ['ROOM_KEY_SECRET']):
     now = int(time.time())
     body = {'v': 1, 'rid': rid, 'name': name, 'iat': now}
     if meta:     body['meta'] = meta
+    if room_type: body['type'] = room_type
     if open_at:  body['openAt'] = int(open_at)    # unix seconds
     if close_at: body['closeAt'] = int(close_at)  # unix seconds
     if ttl:      body['exp'] = now + int(ttl)

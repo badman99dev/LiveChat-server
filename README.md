@@ -23,6 +23,7 @@ Room me entry **Room Access Key (RAK)** se hoti hai — dekho [Room Access Keys]
 - **Key-embedded window** — `openAt` / `closeAt` optional; window ke bahar key sirf enter kar sakti hai
 - **Stickers** — server sirf sticker **id** bhejta hai, art client-side (`/stickers/*.svg`), id allowlist se validate
 - **Reaction bar** — YouTube-jaisa emoji spam: **ephemeral** (DB me store nahi), per-user rate limit **nahi**, server-wide safety cap
+- **Room type** — key me `type` (cricket/football/food/...); uske hisaab se stickers/reactions filter — chaat room me wicket sticker nahi aayega 😄
 - **Auto retention** — 10 min purane messages delete, 30 min idle room auto-close (configurable)
 - **Free gap-fill** — `Last-Event-ID` header se miss hui messages apne aap replay
 - **Do parallel streams** — chat + score ek hi connection pe (HTTP/2 multiplexing)
@@ -130,21 +131,23 @@ Key-issuer server ──issue──►  rk1...  ──►  Chat server ──ver
 
 | Key me | Matlab |
 |---|---|
-| kuch nahi | Room ab bhi khulega, kabhi force-close nahi |
+| `type` | Room ka type (`cricket`, `football`, `food`...) — stickers/reactions isi se filter hote hain |
 | `openAt` | Isse pehle room khulega hi nahi → `403 not_yet` |
 | `closeAt` | Is waqt room **band**; uske baad key **sirf enter** kar sakti hai, reopen nahi → `404 room_not_exist` |
 | dono | Room sirf `[openAt, closeAt)` ke andar open/re-open ho sakta hai, `closeAt` pe band |
+
+`type` optional hai (1–32 chars, `a-z 0-9 _ -`). Naya type = bas key me daal do; sticker/reaction jo us type ke liye tag kiye hain wahi dikhte hain (universal ones sab jagah).
 
 > `closeAt` = room ka "khatam hone ka time". Uske baad key zinda rehti hai par uske paas **sirf enter ka haq** hai. Room already band ho gaya ho to `room_not_exist` (404) milta hai aur SSE stream turant band — koi RAM waste nahi.
 
 **Key generate karo:**
 ```bash
 ROOM_KEY_SECRET=$(openssl rand -hex 32) node scripts/make-room-key.js \
-  --id match-1024 --name "IND vs AUS — 2nd ODI" --close +6h
+  --id match-1024 --name "IND vs AUS — 2nd ODI" --type cricket --close +6h
 # rk1.AbCd...xyz
 
 # fixed window
-node scripts/make-room-key.js --id final-1 --name "Final" \
+node scripts/make-room-key.js --id final-1 --name "Final" --type football \
   --open "2026-11-01T14:00:00Z" --end "2026-11-01T17:00:00Z"
 ```
 
@@ -176,8 +179,8 @@ node scripts/make-room-key.js --id final-1 --name "Final" \
 | `POST` | `/api/chat/send` | `{"key":"rk1...","kind":"sticker","body":"six"}` → sticker |
 | `POST` | `/api/chat/react` | `{"key":"rk1...","reaction":"heart"}` → ephemeral reaction (store nahi hota) |
 | `GET` | `/api/chat/stats?key=rk1...` | `{room, online}` |
-| `GET` | `/api/stickers` | Sticker id + label list (art client-side) |
-| `GET` | `/api/reactions` | Reaction id + emoji list |
+| `GET` | `/api/stickers?type=cricket` | Sticker id + label list (type ke hisaab se filtered; art client-side) |
+| `GET` | `/api/reactions?type=cricket` | Reaction id + emoji list (type-filtered) |
 
 ### Streams (SSE)
 | Method | Path | Events |
@@ -417,12 +420,14 @@ Naya reaction add karna: `lib/reactions.js` me `{ id, emoji, label }` daal do. B
 
 Server sirf **id** jaanta hai, art client-side rehti hai:
 
-1. `lib/stickers.js` me entry add karo: `{ id: 'hattrick', label: 'Hat-trick!' }`
+1. `lib/stickers.js` me entry add karo:
+   - har room me: `{ id: 'hattrick', label: 'Hat-trick!' }`
+   - sirf cricket room me: `{ id: 'hattrick', label: 'Hat-trick!', types: ['cricket'] }`
 2. `public/stickers/hattrick.svg` daal do
 
-Bas. Client `/api/stickers` se list laata hai aur `/stickers/<id>.svg` render karta hai.
-Server id ko allowlist se validate karta hai — galat id pe `400 unknown sticker`, isliye
-koi client arbitrary id inject nahi kar sakta.
+Bas. Client `/api/stickers?type=<room type>` se list laata hai aur `/stickers/<id>.svg`
+render karta hai. Server id ko allowlist se validate karta hai — galat id pe
+`400 unknown sticker`, isliye koi client arbitrary id inject nahi kar sakta.
 
 ---
 

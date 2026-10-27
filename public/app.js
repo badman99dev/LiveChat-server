@@ -43,6 +43,7 @@ const els = {
   leaveRoom: $('leaveRoom'),
   roomName: $('roomName'),
   roomId: $('roomId'),
+  roomType: $('roomType'),
   chatStatus: $('chatStatus'),
   feedStatus: $('feedStatus'),
   feedNote: $('feedNote'),
@@ -74,13 +75,18 @@ function saveKey(key) {
    (client-side asset). Sending a sticker posts { kind:'sticker', body:<id> }. */
 
 const STICKER_BASE = '/stickers';
-let stickersReady = false;
+let stickersType = null;
+let stickerReq = 0;
 
-async function loadStickers() {
-  if (stickersReady) return;
+async function loadStickers(type) {
+  const want = type || '';
+  if (stickersType === want) return;
+  const req = ++stickerReq;
   try {
-    const res = await fetch('/api/stickers');
+    const q = want ? `?type=${encodeURIComponent(want)}` : '';
+    const res = await fetch(`/api/stickers${q}`);
     const data = await res.json();
+    if (req !== stickerReq) return; // a newer request won — drop this response
     const list = data.stickers || [];
     const base = data.basePath || STICKER_BASE;
     els.stickerGrid.replaceChildren();
@@ -98,7 +104,7 @@ async function loadStickers() {
       btn.append(img);
       els.stickerGrid.append(btn);
     }
-    stickersReady = true;
+    stickersType = want;
   } catch {
     /* ignore — stickers are optional */
   }
@@ -112,7 +118,8 @@ function toggleStickerPanel(force) {
 }
 
 els.stickerToggle.addEventListener('click', () => {
-  loadStickers();
+  // Keep the room's type — reloading without it would show every sticker.
+  loadStickers(state.room && state.room.type);
   toggleStickerPanel();
 });
 
@@ -136,13 +143,18 @@ document.addEventListener('keydown', (e) => {
 /* Not stored in the DB, not rate-limited per user. A tap floats an emoji
    locally and fires a tiny SSE event so the whole room sees it. */
 
-let reactionsReady = false;
+let reactionsType = null;
+let reactionReq = 0;
 
-async function loadReactions() {
-  if (reactionsReady) return;
+async function loadReactions(type) {
+  const want = type || '';
+  if (reactionsType === want) return;
+  const req = ++reactionReq;
   try {
-    const res = await fetch('/api/reactions');
+    const q = want ? `?type=${encodeURIComponent(want)}` : '';
+    const res = await fetch(`/api/reactions${q}`);
     const data = await res.json();
+    if (req !== reactionReq) return; // a newer request won — drop this response
     const list = data.reactions || [];
     els.reactionBar.replaceChildren();
     for (const r of list) {
@@ -155,7 +167,7 @@ async function loadReactions() {
       els.reactionBar.append(btn);
     }
     els.reactionBar.hidden = list.length === 0;
-    reactionsReady = true;
+    reactionsType = want;
   } catch {
     /* reactions are optional */
   }
@@ -241,7 +253,13 @@ function renderRoom() {
   if (!state.room) return;
   els.roomName.textContent = state.room.name || state.room.id;
   els.roomId.textContent = state.room.id ? `#${state.room.id}` : '';
+  const type = state.room.type;
+  els.roomType.textContent = type || '';
+  els.roomType.hidden = !type;
   els.leaveRoom.hidden = false;
+  // Room type decides which stickers / reactions show up.
+  loadStickers(type);
+  loadReactions(type);
 }
 
 async function verifyKey(key) {
@@ -703,9 +721,9 @@ async function startChat() {
 }
 
 (async function boot() {
+  // Stickers/reactions are loaded once the room (and its type) is known —
+  // renderRoom() kicks that off.
   connectFeed();
-  loadStickers();
-  loadReactions();
 
   const urlKey = new URLSearchParams(location.search).get('key');
   const key = urlKey || storedKey();
