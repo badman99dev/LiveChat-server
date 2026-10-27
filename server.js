@@ -9,6 +9,7 @@ const { ScoreFeed } = require('./lib/score');
 const roomkey = require('./lib/roomkey');
 const stickers = require('./lib/stickers');
 const reactions = require('./lib/reactions');
+const identity = require('./lib/identity');
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.PORT ? '0.0.0.0' : '127.0.0.1');
@@ -301,7 +302,10 @@ async function handleApi(req, res, url) {
 
   if (route === 'GET /api/me') {
     const user = auth.sessionFrom(req);
-    return json(res, 200, { user: user ? { id: user.uid, name: user.name } : null });
+    if (user) return json(res, 200, { user: { id: user.uid, name: user.name } });
+    const ident = await identity.verify(req);
+    if (ident.ok) return json(res, 200, { user: { id: ident.uid, name: ident.handle } });
+    return json(res, 200, { user: null });
   }
 
   if (route === 'POST /api/login') {
@@ -309,15 +313,25 @@ async function handleApi(req, res, url) {
       return json(res, 429, { error: 'too many attempts' });
     }
     const body = await readBody(req);
-    const name = normalizeText(body.name);
+
+    // A verified identity is authoritative: the display name is never taken
+    // from the client when the app proved who it is.
+    const ident = await identity.verify(req);
+    if (!ident.ok && ident.code) {
+      return json(res, 403, { error: ident.code, message: ident.message });
+    }
+
+    const name = ident.ok ? ident.handle : normalizeText(body.name);
     if (!NAME_RE.test(name)) {
       return json(res, 400, { error: 'name must be 2-24 chars (letters, numbers, _ . -)' });
     }
-    const user = auth.newUser(name);
+    // Verified accounts keep their platform uid, so mutes / bans / reports
+    // survive reconnects and follow the person, not one socket.
+    const user = ident.ok ? { uid: ident.uid, name: ident.handle } : auth.newUser(name);
     return json(
       res,
       200,
-      { user: { id: user.uid, name: user.name } },
+      { user: { id: user.uid, name: user.name }, verified: Boolean(ident.ok) },
       { 'Set-Cookie': auth.issue(user, cookieOptions(req)) },
     );
   }
@@ -395,11 +409,19 @@ async function handleApi(req, res, url) {
     if (resolved.error) return roomDenied(res, resolved);
     const rid = resolved.room.room_id;
 
-    if (rateLimited(msgLimiter, `${rid}:${user.uid}`, RATE_MS)) {
+    // Re-check the identity on write: a stolen/old cookie must not let anyone
+    // post under somebody else's handle.
+    const ident = await identity.verify(req);
+    if (!ident.ok && ident.code) {
+      return json(res, 403, { error: ident.code, message: ident.message });
+    }
+    const sender = ident.ok ? { uid: ident.uid, name: ident.handle } : user;
+
+    if (rateLimited(msgLimiter, `${rid}:${sender.uid}`, RATE_MS)) {
       return json(res, 429, { error: 'slow down' });
     }
 
-    if (db.isBanned(rid, user.uid)) {
+    if (db.isBanned(rid, sender.uid)) {
       return json(res, 403, { error: 'you are muted' });
     }
 
@@ -422,7 +444,7 @@ async function handleApi(req, res, url) {
       }
     }
 
-    const row = db.insert({ channel: rid, userId: user.uid, name: user.name, body: text, kind });
+    const row = db.insert({ channel: rid, userId: sender.uid, name: sender.name, body: text, kind });
     const wire = toWire(row);
     hub.emit(`chat:${rid}`, 'chat', wire, wire.seq);
     return json(res, 200, { ok: true, message: wire });
@@ -436,6 +458,12 @@ async function handleApi(req, res, url) {
     const resolved = resolveRoom(url, body);
     if (resolved.error) return roomDenied(res, resolved);
 
+    const ident = await identity.verify(req);
+    if (!ident.ok && ident.code) {
+      return json(res, 403, { error: ident.code, message: ident.message });
+    }
+    const sender = ident.ok ? { uid: ident.uid, name: ident.handle } : user;
+
     const r = reactions.getReaction(body.reaction ?? body.body);
     if (!r) return json(res, 400, { error: 'unknown reaction' });
 
@@ -447,8 +475,8 @@ async function handleApi(req, res, url) {
       rid: `r${++reactSeq}`,
       reaction: r.id,
       emoji: r.emoji,
-      userId: user.uid,
-      name: user.name,
+      userId: sender.uid,
+      name: sender.name,
       ts: Date.now(),
     });
     return json(res, 200, { ok: true, reaction: r.id });
@@ -476,9 +504,16 @@ async function handleApi(req, res, url) {
   return json(res, 404, { error: 'not found' });
 }
 
-function handleChatStream(req, res, url) {
+async function handleChatStream(req, res, url) {
   const resolved = resolveRoom(url, null);
   if (resolved.error) return streamDenied(req, res, resolved);
+
+  // The stream is a first-class authenticated request too: a client that fails
+  // identity never gets a socket (and never appears in presence).
+  const ident = await identity.verify(req);
+  if (!ident.ok && ident.code) {
+    return streamDenied(req, res, { error: ident.code, message: ident.message });
+  }
 
   const room = resolved.room;
   const rid = room.room_id;
@@ -497,12 +532,13 @@ function handleChatStream(req, res, url) {
   const online = hub.add(key, res);
   hub.emit(key, 'presence', { online, room: rid });
 
-  const user = auth.sessionFrom(req);
+  const user = ident.ok ? { name: ident.handle } : auth.sessionFrom(req);
   res.write(
     `event: hello\ndata: ${JSON.stringify({
       room: { id: rid, name: room.name, type: room.type },
       online,
       me: user ? user.name : null,
+      verified: Boolean(ident.ok),
     })}\n\n`,
   );
 
